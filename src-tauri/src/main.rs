@@ -6,7 +6,7 @@ mod server;
 
 use config::{AppConfig, load_config, save_config};
 use server::{ServerManager, ServerStatus};
-use tauri::State;
+use tauri::{Manager, State};
 use tokio::sync::Mutex;
 
 /// Global server manager state
@@ -206,6 +206,19 @@ fn main() {
             scan_credentials,
             scan_all_credentials,
         ])
+        .on_window_event(|event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event.event() {
+                // Stop the server when window is closing
+                let app_handle = event.window().app_handle();
+                let state: State<AppState> = app_handle.state();
+
+                // Use blocking to stop the server synchronously
+                if let Ok(mut manager) = state.server_manager.try_lock() {
+                    // Manually kill the process since we can't use async here
+                    ServerManager::kill_process(&mut manager);
+                };
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

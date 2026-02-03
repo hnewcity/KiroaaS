@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, ReactNode } from 'react';
-import { Language, translations, TranslationKey } from '@/lib/i18n';
+import { getTranslation, Language, TranslationKey } from '@/lib/i18n';
 
 interface I18nContextType {
   lang: Language;
@@ -11,19 +11,38 @@ const I18nContext = createContext<I18nContextType | null>(null);
 
 const LANG_STORAGE_KEY = 'kiroaas-lang';
 
+function isSupportedLanguage(value: string | null): value is Language {
+  return (
+    value === 'zh' ||
+    value === 'en' ||
+    value === 'ru' ||
+    value === 'es' ||
+    value === 'id' ||
+    value === 'pt' ||
+    value === 'ja' ||
+    value === 'ko'
+  );
+}
+
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState<Language>(() => {
     // Try to get from localStorage, default to system language or 'en'
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem(LANG_STORAGE_KEY);
-      if (stored === 'zh' || stored === 'en') {
+      if (isSupportedLanguage(stored)) {
         return stored;
       }
       // Detect system language
       const systemLang = navigator.language.toLowerCase();
-      if (systemLang.startsWith('zh')) {
-        return 'zh';
-      }
+
+      const primary = systemLang.split('-')[0];
+      if (primary === 'zh') return 'zh';
+      if (primary === 'ru') return 'ru';
+      if (primary === 'es') return 'es';
+      if (primary === 'id') return 'id';
+      if (primary === 'pt') return 'pt';
+      if (primary === 'ja') return 'ja';
+      if (primary === 'ko') return 'ko';
     }
     return 'en';
   });
@@ -34,7 +53,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   };
 
   const t = (key: TranslationKey): string => {
-    return translations[lang][key] || key;
+    return getTranslation(lang, key);
   };
 
   return (

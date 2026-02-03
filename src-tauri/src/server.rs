@@ -5,6 +5,9 @@ use std::io::{BufRead, BufReader};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
 /// Server status information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerStatus {
@@ -112,12 +115,22 @@ impl ServerManager {
             .stderr(Stdio::piped())
             .stdin(Stdio::null());
 
+        // Create a new process group so we can kill all child processes
+        #[cfg(unix)]
+        unsafe {
+            cmd.pre_exec(|| {
+                // Create a new process group with this process as the leader
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+
         // Clear old logs
         self.logs.lock().unwrap().clear();
 
         // Log the executable path for debugging
         if let Ok(mut logs) = self.logs.lock() {
-            logs.push(format!("[Debug] Starting server with executable: {}", python_exe));
+            logs.push(format!("Starting server with executable: {}", python_exe));
         }
 
         // Spawn the process
@@ -184,12 +197,14 @@ impl ServerManager {
     /// Stop the running server
     pub async fn stop(&mut self) -> Result<(), String> {
         if let Some(mut child) = self.process.take() {
-            // Try graceful shutdown first
             #[cfg(unix)]
-            {
-                unsafe {
-                    libc::kill(child.id() as i32, libc::SIGTERM);
-                }
+            let pid = child.id() as i32;
+
+            // Try graceful shutdown first - kill the entire process group
+            #[cfg(unix)]
+            unsafe {
+                // Send SIGTERM to the entire process group (negative PID)
+                libc::kill(-pid, libc::SIGTERM);
             }
 
             #[cfg(windows)]
@@ -206,7 +221,12 @@ impl ServerManager {
                     Ok(Some(_)) => break,
                     Ok(None) => {
                         if start.elapsed() > timeout {
-                            // Force kill if timeout
+                            // Force kill the entire process group if timeout
+                            #[cfg(unix)]
+                            unsafe {
+                                libc::kill(-pid, libc::SIGKILL);
+                            }
+                            #[cfg(not(unix))]
                             let _ = child.kill();
                             break;
                         }
@@ -232,6 +252,28 @@ impl ServerManager {
     /// Get the current server status
     pub fn get_status(&self) -> ServerStatus {
         self.status.clone()
+    }
+
+    /// Kill the server process synchronously (for use in window close handler)
+    pub fn kill_process(&mut self) {
+        if let Some(child) = self.process.take() {
+            #[cfg(unix)]
+            unsafe {
+                let pid = child.id() as i32;
+                // Kill the entire process group
+                libc::kill(-pid, libc::SIGKILL);
+            }
+            #[cfg(not(unix))]
+            {
+                let mut child = child;
+                let _ = child.kill();
+            }
+        }
+        self.status = ServerStatus {
+            status: "stopped".to_string(),
+            port: None,
+            error: None,
+        };
     }
 
     /// Get the path to the Python executable
@@ -287,8 +329,18 @@ impl ServerManager {
 impl Drop for ServerManager {
     fn drop(&mut self) {
         // Ensure server is stopped when manager is dropped
-        if let Some(mut child) = self.process.take() {
-            let _ = child.kill();
+        if let Some(child) = self.process.take() {
+            // Kill the entire process group
+            #[cfg(unix)]
+            unsafe {
+                let pid = child.id() as i32;
+                libc::kill(-pid, libc::SIGKILL);
+            }
+            #[cfg(not(unix))]
+            {
+                let mut child = child;
+                let _ = child.kill();
+            }
         }
     }
 }

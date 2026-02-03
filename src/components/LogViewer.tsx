@@ -111,7 +111,7 @@ export function LogViewer({ logs = [], onLogsCleared }: LogViewerProps) {
             {/* Terminal Viewport */}
             <div
                 ref={viewportRef}
-                className="flex-1 overflow-auto p-6 space-y-1 custom-scrollbar scroll-smooth relative"
+                className="flex-1 overflow-auto px-6 pt-6 pb-0 space-y-1 custom-scrollbar scroll-smooth relative"
             >
                 {logs.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-stone-600 space-y-4">

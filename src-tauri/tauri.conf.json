@@ -13,9 +13,13 @@
   "tauri": {
     "allowlist": {
       "all": false,
+      "window": {
+        "all": false,
+        "startDragging": true
+      },
       "shell": {
         "all": false,
-        "open": true
+        "open": "^(https?://|ccswitch://).*"
       },
       "fs": {
         "all": false,
@@ -80,7 +84,9 @@
         "width": 900,
         "height": 700,
         "minWidth": 800,
-        "minHeight": 600
+        "minHeight": 600,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ]
   }
