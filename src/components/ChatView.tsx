@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, Trash2, Bot, ImagePlus, X, Sparkles } from 'lucide-react';
+import { Send, Loader2, Trash2, ImagePlus, X, Sparkles, Copy, Check } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Button } from '@/components/ui/button';
 import {
   Select,
@@ -11,13 +14,32 @@ import {
 } from '@/components/ui/select';
 import { useI18n } from '@/hooks/useI18n';
 
-interface MessageContent {
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="p-1.5 rounded-lg bg-white/80 hover:bg-white text-stone-500 hover:text-stone-700 transition-colors shadow-sm"
+    >
+      {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+    </button>
+  );
+}
+
+export interface MessageContent {
   type: 'text' | 'image_url';
   text?: string;
   image_url?: { url: string };
 }
 
-interface Message {
+export interface Message {
   role: 'user' | 'assistant';
   content: string | MessageContent[];
 }
@@ -27,11 +49,12 @@ interface ChatViewProps {
   port: number;
   apiKey: string;
   isRunning: boolean;
+  messages: Message[];
+  onMessagesChange: React.Dispatch<React.SetStateAction<Message[]>>;
 }
 
-export function ChatView({ host, port, apiKey, isRunning }: ChatViewProps) {
+export function ChatView({ host, port, apiKey, isRunning, messages, onMessagesChange }: ChatViewProps) {
   const { t } = useI18n();
-  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -97,7 +120,7 @@ export function ChatView({ host, port, apiKey, isRunning }: ChatViewProps) {
     }
 
     const userMessage: Message = { role: 'user', content: userContent };
-    setMessages(prev => [...prev, userMessage]);
+    onMessagesChange(prev => [...prev, userMessage]);
     setInput('');
     setImages([]);
     setIsLoading(true);
@@ -148,10 +171,10 @@ export function ChatView({ host, port, apiKey, isRunning }: ChatViewProps) {
               if (content) {
                 assistantContent += content;
                 if (!messageAdded) {
-                  setMessages(prev => [...prev, { role: 'assistant', content: assistantContent }]);
+                  onMessagesChange(prev => [...prev, { role: 'assistant', content: assistantContent }]);
                   messageAdded = true;
                 } else {
-                  setMessages(prev => {
+                  onMessagesChange(prev => {
                     const newMessages = [...prev];
                     newMessages[newMessages.length - 1] = {
                       role: 'assistant',
@@ -169,7 +192,7 @@ export function ChatView({ host, port, apiKey, isRunning }: ChatViewProps) {
       }
     } catch (error) {
       console.error('Chat error:', error);
-      setMessages(prev => [
+      onMessagesChange(prev => [
         ...prev,
         {
           role: 'assistant',
@@ -189,7 +212,7 @@ export function ChatView({ host, port, apiKey, isRunning }: ChatViewProps) {
   };
 
   const clearChat = () => {
-    setMessages([]);
+    onMessagesChange([]);
     setImages([]);
   };
 
@@ -232,12 +255,11 @@ export function ChatView({ host, port, apiKey, isRunning }: ChatViewProps) {
       {/* Messages Area */}
       <div className={`flex-1 px-4 ${messages.length > 0 ? 'overflow-y-auto' : 'flex items-center justify-center'}`}>
         {!isRunning ? (
-          <div className="text-center text-stone-400">
-            <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-stone-200/50 flex items-center justify-center">
-              <Bot className="h-10 w-10 opacity-40" />
+          <div className="flex flex-col items-center justify-center h-full">
+            <div className="text-center max-w-lg mx-auto">
+              <p className="text-4xl font-bold text-stone-300 tracking-tight mb-2">{t('chatServerOffline')}</p>
+              <p className="text-sm text-stone-400">{t('chatServerOfflineDesc')}</p>
             </div>
-            <p className="font-semibold text-stone-500">{t('chatServerOffline')}</p>
-            <p className="text-sm mt-1">{t('chatServerOfflineDesc')}</p>
           </div>
         ) : messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full">
@@ -275,8 +297,93 @@ export function ChatView({ host, port, apiKey, isRunning }: ChatViewProps) {
                       </div>
                     </div>
                   ) : (
-                    <div className="text-stone-700 prose prose-sm prose-stone max-w-none prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-pre:bg-stone-100 prose-pre:text-stone-800 prose-code:text-stone-700 prose-code:bg-stone-100 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none">
-                      <ReactMarkdown>{messageText}</ReactMarkdown>
+                    <div className="text-stone-700 text-sm leading-relaxed">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          code({ className, children, ...props }) {
+                            const match = /language-(\w+)/.exec(className || '');
+                            const codeString = String(children).replace(/\n$/, '');
+                            const isInline = !match && !codeString.includes('\n');
+
+                            if (isInline) {
+                              return (
+                                <code className="bg-stone-100 text-stone-700 px-1.5 py-0.5 rounded text-[13px] font-mono" {...props}>
+                                  {children}
+                                </code>
+                              );
+                            }
+
+                            return (
+                              <div className="relative group my-3">
+                                <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <CopyButton text={codeString} />
+                                </div>
+                                <SyntaxHighlighter
+                                  style={oneLight}
+                                  language={match?.[1] || 'text'}
+                                  PreTag="div"
+                                  customStyle={{
+                                    margin: 0,
+                                    borderRadius: '12px',
+                                    fontSize: '13px',
+                                    padding: '16px',
+                                  }}
+                                >
+                                  {codeString}
+                                </SyntaxHighlighter>
+                              </div>
+                            );
+                          },
+                          table({ children }) {
+                            return (
+                              <div className="my-3 overflow-x-auto rounded-xl border border-stone-200">
+                                <table className="min-w-full divide-y divide-stone-200">
+                                  {children}
+                                </table>
+                              </div>
+                            );
+                          },
+                          thead({ children }) {
+                            return <thead className="bg-stone-100">{children}</thead>;
+                          },
+                          th({ children }) {
+                            return <th className="px-4 py-2 text-left text-xs font-semibold text-stone-600">{children}</th>;
+                          },
+                          td({ children }) {
+                            return <td className="px-4 py-2 text-sm border-t border-stone-100">{children}</td>;
+                          },
+                          p({ children }) {
+                            return <p className="my-2">{children}</p>;
+                          },
+                          ul({ children }) {
+                            return <ul className="my-2 ml-4 list-disc space-y-1">{children}</ul>;
+                          },
+                          ol({ children }) {
+                            return <ol className="my-2 ml-4 list-decimal space-y-1">{children}</ol>;
+                          },
+                          li({ children }) {
+                            return <li className="pl-1">{children}</li>;
+                          },
+                          h1({ children }) {
+                            return <h1 className="text-xl font-bold mt-4 mb-2">{children}</h1>;
+                          },
+                          h2({ children }) {
+                            return <h2 className="text-lg font-bold mt-4 mb-2">{children}</h2>;
+                          },
+                          h3({ children }) {
+                            return <h3 className="text-base font-bold mt-3 mb-2">{children}</h3>;
+                          },
+                          blockquote({ children }) {
+                            return <blockquote className="border-l-4 border-stone-300 pl-4 my-2 text-stone-600 italic">{children}</blockquote>;
+                          },
+                          a({ href, children }) {
+                            return <a href={href} className="text-blue-600 hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>;
+                          },
+                        }}
+                      >
+                        {messageText}
+                      </ReactMarkdown>
                     </div>
                   )}
                 </div>

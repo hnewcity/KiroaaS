@@ -5,7 +5,7 @@ import { LogViewer } from './components/LogViewer';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { ApiExamples } from './components/ApiExamples';
 import { CCSwitchImport } from './components/CCSwitchImport';
-import { ChatView } from './components/ChatView';
+import { ChatView, Message } from './components/ChatView';
 import { useConfig } from './hooks/useConfig';
 import { useI18n } from './hooks/useI18n';
 import { useServerStatus } from './hooks/useServerStatus';
@@ -38,6 +38,7 @@ export default function App() {
 
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [logs, setLogs] = useState<string[]>([]);
+  const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [pendingAction, setPendingAction] = useState<'start' | 'stop' | null>(null);
   const [tempConfig, setTempConfig] = useState(config);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -432,6 +433,8 @@ export default function App() {
                   port={config.server_port}
                   apiKey={config.proxy_api_key}
                   isRunning={isRunning}
+                  messages={chatMessages}
+                  onMessagesChange={setChatMessages}
                 />
               </div>
             )}

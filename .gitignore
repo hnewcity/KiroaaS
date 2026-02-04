@@ -15,7 +15,7 @@ __pycache__/
 .Python
 *.egg-info/
 dist/
-build/
+# build/
 
 # Debug logs (generated when DEBUG_MODE is enabled)
 debug_logs*/
@@ -48,7 +48,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # PyInstaller specific
-python-backend/build/build/
+# python-backend/build/build/
 python-backend/build/dist/
 *.spec.bak
 # Byte-compiled / optimized / DLL files
@@ -62,6 +62,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+!python-backend/build/
 develop-eggs/
 dist/
 downloads/
