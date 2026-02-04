@@ -48,6 +48,8 @@ cp python-backend/build/dist/kiro-gateway src-tauri/resources/
 
 # Build Tauri app
 echo "Building macOS app..."
+export TAURI_PRIVATE_KEY=$(cat ~/.tauri/kiroaas.key)
+export TAURI_KEY_PASSWORD=""
 npm run tauri:build
 
 echo ""
