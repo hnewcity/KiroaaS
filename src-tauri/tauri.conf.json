@@ -27,7 +27,10 @@
         "writeFile": true,
         "readDir": true,
         "createDir": true,
-        "scope": ["$APPDATA/*", "$APPDATA/**"]
+        "scope": [
+          "$APPDATA/*",
+          "$APPDATA/**"
+        ]
       },
       "path": {
         "all": true
@@ -40,9 +43,11 @@
     },
     "bundle": {
       "active": true,
-      "resources": ["resources/kiro-gateway"],
+      "resources": [
+        "resources/kiro-gateway"
+      ],
       "category": "DeveloperTool",
-      "copyright": "Copyright (C) 2025 Kiro Gateway Team",
+      "copyright": "Copyright (C) 2026 KiroaaS",
       "deb": {
         "depends": []
       },
@@ -60,7 +65,7 @@
         "exceptionDomain": "",
         "frameworks": [],
         "providerShortName": null,
-        "signingIdentity": null
+        "signingIdentity": "-"
       },
       "shortDescription": "KiroaaS Desktop Client",
       "targets": "all",
@@ -81,8 +86,8 @@
         "fullscreen": false,
         "resizable": true,
         "title": "KiroaaS",
-        "width": 900,
-        "height": 700,
+        "width": 1200,
+        "height": 800,
         "minWidth": 800,
         "minHeight": 600,
         "titleBarStyle": "Overlay",
