@@ -34,7 +34,7 @@ Unduh rilis terbaru:
 
 | Platform | Unduh |
 |----------|-------|
-| macOS | [KiroaaS.dmg](https://github.com/Jwadow/kiro-gateway/releases) |
+| macOS | [KiroaaS.dmg](https://github.com/hnewcity/KiroaaS/releases) |
 
 > Dukungan Windows dan Linux segera hadir.
 
@@ -42,7 +42,7 @@ Unduh rilis terbaru:
 
 ```bash
 # Clone repositori
-git clone https://github.com/Jwadow/kiro-gateway.git
+git clone https://github.com/hnewcity/KiroaaS.git
 cd kiro-gateway
 
 # Instal dependensi

@@ -1,0 +1,23 @@
+{
+  "version": "1.0.1",
+  "notes": "修复了若干 bug 并添加了新功能",
+  "pub_date": "2026-02-04T12:00:00Z",
+  "platforms": {
+    "darwin-x86_64": {
+      "signature": "从 .sig 文件复制的签名内容",
+      "url": "https://github.com/hnewcity/KiroaaS/releases/download/v1.0.1/KiroaaS.app.tar.gz"
+    },
+    "darwin-aarch64": {
+      "signature": "从 .sig 文件复制的签名内容",
+      "url": "https://github.com/hnewcity/KiroaaS/releases/download/v1.0.1/KiroaaS.app.tar.gz"
+    },
+    "linux-x86_64": {
+      "signature": "从 .sig 文件复制的签名内容",
+      "url": "https://github.com/hnewcity/KiroaaS/releases/download/v1.0.1/kiroaas_1.0.1_amd64.AppImage.tar.gz"
+    },
+    "windows-x86_64": {
+      "signature": "从 .sig 文件复制的签名内容",
+      "url": "https://github.com/hnewcity/KiroaaS/releases/download/v1.0.1/KiroaaS_1.0.1_x64_en-US.msi.zip"
+    }
+  }
+}

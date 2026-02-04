@@ -13,7 +13,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Jwadow/kiro-gateway.git"
+    "url": "git+https://github.com/hnewcity/KiroaaS.git"
   },
   "keywords": [
     "kiro",
@@ -25,9 +25,9 @@
   "author": "",
   "license": "AGPL-3.0",
   "bugs": {
-    "url": "https://github.com/Jwadow/kiro-gateway/issues"
+    "url": "https://github.com/hnewcity/KiroaaS/issues"
   },
-  "homepage": "https://github.com/Jwadow/kiro-gateway#readme",
+  "homepage": "https://github.com/hnewcity/KiroaaS#readme",
   "dependencies": {
     "@hookform/resolvers": "^3.3.4",
     "@radix-ui/react-collapsible": "^1.1.12",

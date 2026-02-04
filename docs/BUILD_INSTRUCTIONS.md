@@ -9,15 +9,17 @@ This guide walks you through building the Kiro Gateway desktop application from 
 Rust is required for building the Tauri backend.
 
 **macOS/Linux:**
+
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
 ```
 
 **Windows:**
-Download and run the installer from: https://rustup.rs/
+Download and run the installer from: <https://rustup.rs/>
 
 **Verify Installation:**
+
 ```bash
 rustc --version
 cargo --version
@@ -25,9 +27,10 @@ cargo --version
 
 ### 2. Install Node.js
 
-Download from: https://nodejs.org/ (v18 or later recommended)
+Download from: <https://nodejs.org/> (v18 or later recommended)
 
 **Verify Installation:**
+
 ```bash
 node --version
 npm --version
@@ -38,6 +41,7 @@ npm --version
 Python 3.14 or later is required.
 
 **Verify Installation:**
+
 ```bash
 python3 --version
 ```
@@ -48,7 +52,7 @@ python3 --version
 
 ```bash
 # Clone the repository (if not already done)
-git clone https://github.com/jwadow/kiro-gateway.git
+git clone https://github.com/hnewcity/KiroaaS.git
 cd kiro-gateway
 
 # Install Node.js dependencies
@@ -72,10 +76,12 @@ cd ../..
 ```
 
 This creates the executable at:
+
 - **macOS/Linux**: `python-backend/build/dist/kiro-gateway`
 - **Windows**: `python-backend/build/dist/kiro-gateway.exe`
 
 **Verify the build:**
+
 ```bash
 # macOS/Linux
 ls -lh python-backend/build/dist/kiro-gateway
@@ -105,12 +111,14 @@ npm run tauri:build
 ```
 
 This will:
+
 1. Build the React frontend (production mode)
 2. Compile the Rust backend
 3. Bundle everything into a native application
 4. Create installers for your platform
 
 **Build output location:**
+
 - **macOS**: `src-tauri/target/release/bundle/dmg/` and `src-tauri/target/release/bundle/macos/`
 - **Windows**: `src-tauri/target/release/bundle/msi/` and `src-tauri/target/release/bundle/nsis/`
 - **Linux**: `src-tauri/target/release/bundle/deb/` and `src-tauri/target/release/bundle/appimage/`
@@ -118,16 +126,19 @@ This will:
 ### Step 5: Test the Application
 
 **macOS:**
+
 ```bash
 open src-tauri/target/release/bundle/macos/Kiro\ Gateway.app
 ```
 
 **Windows:**
+
 ```bash
 .\src-tauri\target\release\kiro-gateway-client.exe
 ```
 
 **Linux:**
+
 ```bash
 ./src-tauri/target/release/kiro-gateway-client
 ```
@@ -141,6 +152,7 @@ npm run tauri:dev
 ```
 
 This will:
+
 - Start the Vite dev server (React frontend with hot-reload)
 - Launch the Tauri window
 - Run the Python server directly with `python3` (not the bundled executable)
@@ -183,6 +195,7 @@ To avoid Windows Defender SmartScreen warnings:
 
 1. Obtain a code signing certificate
 2. Configure in `src-tauri/tauri.conf.json`:
+
    ```json
    "windows": {
      "certificateThumbprint": "YOUR_CERT_THUMBPRINT"
@@ -233,7 +246,8 @@ sudo pacman -S webkit2gtk \
 Rust is not installed or not in PATH.
 
 **Solution:**
-1. Install Rust: https://rustup.rs/
+
+1. Install Rust: <https://rustup.rs/>
 2. Restart your terminal
 3. Verify: `rustc --version`
 
@@ -242,6 +256,7 @@ Rust is not installed or not in PATH.
 PyInstaller is not installed.
 
 **Solution:**
+
 ```bash
 pip install pyinstaller
 ```
@@ -251,6 +266,7 @@ pip install pyinstaller
 The Python executable might be missing from resources.
 
 **Solution:**
+
 1. Verify the executable exists: `ls python-backend/build/dist/kiro-gateway`
 2. Copy it to resources: `cp python-backend/build/dist/kiro-gateway src-tauri/resources/`
 3. Rebuild: `npm run tauri:build`
@@ -260,6 +276,7 @@ The Python executable might be missing from resources.
 First build takes longer as Rust compiles all dependencies.
 
 **Solution:**
+
 - Subsequent builds will be much faster (incremental compilation)
 - Use `npm run tauri:dev` for development (faster iteration)
 
@@ -268,6 +285,7 @@ First build takes longer as Rust compiles all dependencies.
 Node modules not installed.
 
 **Solution:**
+
 ```bash
 npm install
 ```
@@ -277,12 +295,14 @@ npm install
 ### Reduce Bundle Size
 
 1. **Strip debug symbols** (already configured in `Cargo.toml`):
+
    ```toml
    [profile.release]
    strip = true
    ```
 
 2. **Enable LTO** (already configured):
+
    ```toml
    lto = true
    ```
@@ -294,11 +314,13 @@ npm install
 ### Faster Development Builds
 
 Use the development profile:
+
 ```bash
 npm run tauri:dev
 ```
 
 This skips:
+
 - Python executable bundling (uses system Python)
 - Frontend minification
 - Rust optimizations
@@ -378,5 +400,6 @@ After building:
 4. **Distribute** the installer to users
 
 For more information, see:
+
 - [Desktop App Documentation](DESKTOP_APP.md)
 - [Main README](../README.md)

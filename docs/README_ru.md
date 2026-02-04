@@ -34,7 +34,7 @@ KiroaaS (Kiro as a Service) — это десктопный шлюз, котор
 
 | Платформа | Скачать |
 |-----------|---------|
-| macOS | [KiroaaS.dmg](https://github.com/Jwadow/kiro-gateway/releases) |
+| macOS | [KiroaaS.dmg](https://github.com/hnewcity/KiroaaS/releases) |
 
 > Поддержка Windows и Linux скоро появится.
 
@@ -42,7 +42,7 @@ KiroaaS (Kiro as a Service) — это десктопный шлюз, котор
 
 ```bash
 # Клонировать репозиторий
-git clone https://github.com/Jwadow/kiro-gateway.git
+git clone https://github.com/hnewcity/KiroaaS.git
 cd kiro-gateway
 
 # Установить зависимости

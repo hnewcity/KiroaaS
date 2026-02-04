@@ -45,6 +45,38 @@ async fn get_server_logs(state: State<'_, AppState>) -> Result<Vec<String>, Stri
     Ok(manager.get_logs())
 }
 
+/// Check for application updates
+#[tauri::command]
+async fn check_for_updates(app: tauri::AppHandle) -> Result<bool, String> {
+    match app.updater().check().await {
+        Ok(update) => {
+            if update.is_update_available() {
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        Err(e) => Err(format!("Failed to check for updates: {}", e)),
+    }
+}
+
+/// Install pending update and restart
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    match app.updater().check().await {
+        Ok(update) => {
+            if update.is_update_available() {
+                update.download_and_install().await
+                    .map_err(|e| format!("Failed to install update: {}", e))?;
+                Ok(())
+            } else {
+                Err("No update available".to_string())
+            }
+        }
+        Err(e) => Err(format!("Failed to check for updates: {}", e)),
+    }
+}
+
 /// Clear server logs
 #[tauri::command]
 async fn clear_server_logs(state: State<'_, AppState>) -> Result<(), String> {
@@ -205,6 +237,8 @@ fn main() {
             validate_credentials,
             scan_credentials,
             scan_all_credentials,
+            check_for_updates,
+            install_update,
         ])
         .on_window_event(|event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event.event() {

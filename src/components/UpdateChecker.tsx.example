@@ -1,0 +1,90 @@
+/**
+ * 更新检查组件示例
+ *
+ * 使用方法:
+ * 1. 将此文件重命名为 UpdateChecker.tsx
+ * 2. 在主应用中导入并使用
+ */
+
+import { useState, useEffect } from 'react';
+import { checkForUpdates, installUpdate } from '../lib/tauri';
+
+export function UpdateChecker() {
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // 启动时自动检查更新
+  useEffect(() => {
+    handleCheckUpdate();
+  }, []);
+
+  const handleCheckUpdate = async () => {
+    setChecking(true);
+    setError(null);
+    try {
+      const hasUpdate = await checkForUpdates();
+      setUpdateAvailable(hasUpdate);
+      if (hasUpdate) {
+        console.log('发现新版本!');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '检查更新失败');
+      console.error('检查更新失败:', err);
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    setInstalling(true);
+    setError(null);
+    try {
+      await installUpdate();
+      // 更新会自动重启应用
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '安装更新失败');
+      console.error('安装更新失败:', err);
+      setInstalling(false);
+    }
+  };
+
+  if (!updateAvailable && !error) {
+    return null; // 没有更新时不显示
+  }
+
+  return (
+    <div className="update-banner">
+      {updateAvailable && (
+        <div className="update-available">
+          <p>🎉 发现新版本!</p>
+          <button
+            onClick={handleInstallUpdate}
+            disabled={installing}
+          >
+            {installing ? '正在安装...' : '立即更新'}
+          </button>
+          <button onClick={() => setUpdateAvailable(false)}>
+            稍后提醒
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <div className="update-error">
+          <p>❌ {error}</p>
+          <button onClick={handleCheckUpdate}>重试</button>
+        </div>
+      )}
+
+      <button
+        onClick={handleCheckUpdate}
+        disabled={checking}
+        className="check-update-btn"
+      >
+        {checking ? '检查中...' : '检查更新'}
+      </button>
+    </div>
+  );
+}

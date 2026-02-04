@@ -34,7 +34,7 @@ KiroaaS(Kiro as a Service)는 로컬 OpenAI 호환 API를 통해 Kiro의 AI 모�
 
 | 플랫폼 | 다운로드 |
 |--------|----------|
-| macOS | [KiroaaS.dmg](https://github.com/Jwadow/kiro-gateway/releases) |
+| macOS | [KiroaaS.dmg](https://github.com/hnewcity/KiroaaS/releases) |
 
 > Windows 및 Linux 지원 예정.
 
@@ -42,7 +42,7 @@ KiroaaS(Kiro as a Service)는 로컬 OpenAI 호환 API를 통해 Kiro의 AI 모�
 
 ```bash
 # 저장소 클론
-git clone https://github.com/Jwadow/kiro-gateway.git
+git clone https://github.com/hnewcity/KiroaaS.git
 cd kiro-gateway
 
 # 의존성 설치

@@ -34,7 +34,7 @@ KiroaaS（Kiro 即服务）是一个桌面网关应用，通过本地 OpenAI 兼
 
 | 平台 | 下载 |
 |------|------|
-| macOS | [KiroaaS.dmg](https://github.com/Jwadow/kiro-gateway/releases) |
+| macOS | [KiroaaS.dmg](https://github.com/hnewcity/KiroaaS/releases) |
 
 > Windows 和 Linux 支持即将推出。
 
@@ -42,7 +42,7 @@ KiroaaS（Kiro 即服务）是一个桌面网关应用，通过本地 OpenAI 兼
 
 ```bash
 # 克隆仓库
-git clone https://github.com/Jwadow/kiro-gateway.git
+git clone https://github.com/hnewcity/KiroaaS.git
 cd kiro-gateway
 
 # 安装依赖

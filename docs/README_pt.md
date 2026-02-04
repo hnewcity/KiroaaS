@@ -34,7 +34,7 @@ Baixe a versão mais recente:
 
 | Plataforma | Download |
 |------------|----------|
-| macOS | [KiroaaS.dmg](https://github.com/Jwadow/kiro-gateway/releases) |
+| macOS | [KiroaaS.dmg](https://github.com/hnewcity/KiroaaS/releases) |
 
 > Suporte para Windows e Linux em breve.
 
@@ -42,7 +42,7 @@ Baixe a versão mais recente:
 
 ```bash
 # Clonar o repositório
-git clone https://github.com/Jwadow/kiro-gateway.git
+git clone https://github.com/hnewcity/KiroaaS.git
 cd kiro-gateway
 
 # Instalar dependências

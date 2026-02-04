@@ -53,3 +53,11 @@ export async function getServerLogs(): Promise<string[]> {
 export async function clearServerLogs(): Promise<void> {
   return await invoke('clear_server_logs');
 }
+
+export async function checkForUpdates(): Promise<boolean> {
+  return await invoke('check_for_updates');
+}
+
+export async function installUpdate(): Promise<void> {
+  return await invoke('install_update');
+}
