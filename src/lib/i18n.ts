@@ -22,7 +22,7 @@ export const translations = {
     starting: '正在启动...',
     stopping: '正在停止...',
     runningOnPort: '运行端口',
-    configureApiKeyFirst: '请先在设置标签页配置 API 密钥，然后再启动服务器',
+    configureApiKeyFirst: '请先在设置标签页配置认证凭据，然后再启动服务器',
     startServerFailed: '启动服务器失败',
     stopServerFailed: '停止服务器失败',
 
@@ -219,7 +219,7 @@ export const translations = {
     starting: 'Starting...',
     stopping: 'Stopping...',
     runningOnPort: 'Running on port',
-    configureApiKeyFirst: 'Please configure your API key in the Settings tab before starting the server.',
+    configureApiKeyFirst: 'Please configure your credentials in the Settings tab before starting the server.',
     startServerFailed: 'Failed to start server',
     stopServerFailed: 'Failed to stop server',
 
@@ -417,7 +417,7 @@ export const translations = {
     stopping: 'Остановка...',
     runningOnPort: 'Работает на порту',
     configureApiKeyFirst:
-      'Сначала настройте API‑ключ на вкладке «Настройки», затем запускайте сервер.',
+      'Сначала настройте учётные данные на вкладке «Настройки», затем запускайте сервер.',
     startServerFailed: 'Не удалось запустить сервер',
     stopServerFailed: 'Не удалось остановить сервер',
 
@@ -618,7 +618,7 @@ export const translations = {
     stopping: 'Deteniendo...',
     runningOnPort: 'Ejecutándose en el puerto',
     configureApiKeyFirst:
-      'Configura tu clave API en la pestaña Configuración antes de iniciar el servidor.',
+      'Configura tus credenciales en la pestaña Configuración antes de iniciar el servidor.',
     startServerFailed: 'No se pudo iniciar el servidor',
     stopServerFailed: 'No se pudo detener el servidor',
 
@@ -819,7 +819,7 @@ export const translations = {
     stopping: 'Menghentikan...',
     runningOnPort: 'Berjalan di port',
     configureApiKeyFirst:
-      'Silakan konfigurasikan kunci API Anda di tab Pengaturan sebelum memulai server.',
+      'Silakan konfigurasikan kredensial Anda di tab Pengaturan sebelum memulai server.',
     startServerFailed: 'Gagal memulai server',
     stopServerFailed: 'Gagal menghentikan server',
 
@@ -1020,7 +1020,7 @@ export const translations = {
     stopping: 'Parando...',
     runningOnPort: 'Executando na porta',
     configureApiKeyFirst:
-      'Configure sua chave de API na aba Configurações antes de iniciar o servidor.',
+      'Configure suas credenciais na aba Configurações antes de iniciar o servidor.',
     startServerFailed: 'Falha ao iniciar o servidor',
     stopServerFailed: 'Falha ao parar o servidor',
 
@@ -1221,7 +1221,7 @@ export const translations = {
     stopping: '停止中...',
     runningOnPort: 'ポート',
     configureApiKeyFirst:
-      'サーバーを起動する前に、設定タブで API キーを設定してください。',
+      'サーバーを起動する前に、設定タブで認証情報を設定してください。',
     startServerFailed: 'サーバーの起動に失敗しました',
     stopServerFailed: 'サーバーの停止に失敗しました',
 
@@ -1422,7 +1422,7 @@ export const translations = {
     stopping: '중지 중...',
     runningOnPort: '포트',
     configureApiKeyFirst:
-      '서버를 시작하기 전에 설정 탭에서 API 키를 먼저 구성하세요.',
+      '서버를 시작하기 전에 설정 탭에서 인증 정보를 먼저 구성하세요.',
     startServerFailed: '서버 시작 실패',
     stopServerFailed: '서버 중지 실패',
 

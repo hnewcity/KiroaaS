@@ -13,12 +13,28 @@ interface ServerControlProps {
   config: AppConfig;
 }
 
+// Check if credentials are configured based on auth method
+function hasCredentials(config: AppConfig): boolean {
+  switch (config.auth_method) {
+    case 'refresh_token':
+      return !!config.refresh_token;
+    case 'creds_file':
+      return !!config.kiro_creds_file;
+    case 'cli_db':
+      return !!config.kiro_cli_db_file;
+    default:
+      return false;
+  }
+}
+
 export function ServerControl({ config }: ServerControlProps) {
   const { status } = useServerStatus();
   const { t } = useI18n();
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const canStart = hasCredentials(config);
 
   const handleStart = async () => {
     setIsStarting(true);
@@ -88,7 +104,7 @@ export function ServerControl({ config }: ServerControlProps) {
           ) : (
             <Button
               onClick={handleStart}
-              disabled={isProcessing || !config.proxy_api_key}
+              disabled={isProcessing || !canStart}
             >
               {isStarting ? (
                 <>
@@ -111,7 +127,7 @@ export function ServerControl({ config }: ServerControlProps) {
           )}
         </div>
 
-        {!config.proxy_api_key && !isRunning && (
+        {!canStart && !isRunning && (
           <p className="text-sm text-muted-foreground">
             {t('configureApiKeyFirst')}
           </p>
