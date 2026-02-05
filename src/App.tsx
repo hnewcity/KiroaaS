@@ -156,6 +156,21 @@ export default function App() {
     setTempConfig(newConfig);
   };
 
+  const handleRestartServer = async () => {
+    setPendingAction('stop');
+    try {
+      await stopServer();
+      // Wait a bit for the server to fully stop
+      await new Promise(resolve => setTimeout(resolve, 500));
+      setPendingAction('start');
+      await startServer(config);
+    } catch (err) {
+      console.error(err);
+      setPendingAction(null);
+      throw err;
+    }
+  };
+
   if (isConfigLoading) {
     return (
       <div className="flex h-screen items-center justify-center bg-[#F2F2F2]">
@@ -379,7 +394,7 @@ export default function App() {
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 max-w-7xl pb-10">
                 <div className="lg:col-span-8 space-y-6 order-2 lg:order-1">
                   <div className="bg-white rounded-[32px] p-8 shadow-sm">
-                    <SettingsForm config={tempConfig} onSave={handleSaveConfig} />
+                    <SettingsForm config={tempConfig} onSave={handleSaveConfig} isRunning={isRunning} onRestart={handleRestartServer} />
                   </div>
                 </div>
                 <div className="lg:col-span-4 space-y-6 order-1 lg:order-2 sticky top-0 lg:static z-10">

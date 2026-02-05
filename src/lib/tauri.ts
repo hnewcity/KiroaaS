@@ -61,3 +61,7 @@ export async function checkForUpdates(): Promise<boolean> {
 export async function installUpdate(): Promise<void> {
   return await invoke('install_update');
 }
+
+export async function getAppVersion(): Promise<string> {
+  return await invoke('get_app_version');
+}

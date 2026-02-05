@@ -201,6 +201,22 @@ export const translations = {
     firstToken: '首个令牌',
     streamRead: '流式读取',
     serverPort: '服务器端口',
+
+    // Config restart
+    configSavedRestartPrompt: '配置已保存。是否要用新配置重启服务？',
+    restartServer: '重启服务',
+    skipRestart: '稍后',
+
+    // About & Updates
+    about: '关于',
+    checkForUpdates: '检查更新',
+    checkingForUpdates: '检查中...',
+    updateAvailable: '新版本 {version} 可用',
+    noUpdateAvailable: '已是最新版本',
+    downloadUpdate: '下载',
+    updateCheckFailed: '检查更新失败',
+    installing: '安装中...',
+    changelog: '更新日志',
   },
   en: {
     // App
@@ -398,6 +414,22 @@ export const translations = {
     firstToken: 'First Token',
     streamRead: 'Stream Read',
     serverPort: 'Server Port',
+
+    // Config restart
+    configSavedRestartPrompt: 'Configuration saved. Restart the server with new settings?',
+    restartServer: 'Restart',
+    skipRestart: 'Later',
+
+    // About & Updates
+    about: 'About',
+    checkForUpdates: 'Check for Updates',
+    checkingForUpdates: 'Checking...',
+    updateAvailable: 'New version {version} available',
+    noUpdateAvailable: "You're up to date",
+    downloadUpdate: 'Download',
+    updateCheckFailed: 'Failed to check for updates',
+    installing: 'Installing...',
+    changelog: 'Changelog',
   },
   ru: {
     // App
@@ -599,6 +631,22 @@ export const translations = {
     firstToken: 'Первый токен',
     streamRead: 'Чтение стрима',
     serverPort: 'Порт сервера',
+
+    // Config restart
+    configSavedRestartPrompt: 'Конфигурация сохранена. Перезапустить сервер с новыми настройками?',
+    restartServer: 'Перезапустить',
+    skipRestart: 'Позже',
+
+    // About & Updates
+    about: 'О программе',
+    checkForUpdates: 'Проверить обновления',
+    checkingForUpdates: 'Проверка...',
+    updateAvailable: 'Доступна новая версия {version}',
+    noUpdateAvailable: 'У вас последняя версия',
+    downloadUpdate: 'Скачать',
+    updateCheckFailed: 'Не удалось проверить обновления',
+    installing: 'Установка...',
+    changelog: 'Список изменений',
   },
   es: {
     // App
@@ -800,6 +848,22 @@ export const translations = {
     firstToken: 'Primer token',
     streamRead: 'Lectura de stream',
     serverPort: 'Puerto del servidor',
+
+    // Config restart
+    configSavedRestartPrompt: 'Configuración guardada. ¿Reiniciar el servidor con la nueva configuración?',
+    restartServer: 'Reiniciar',
+    skipRestart: 'Más tarde',
+
+    // About & Updates
+    about: 'Acerca de',
+    checkForUpdates: 'Buscar actualizaciones',
+    checkingForUpdates: 'Comprobando...',
+    updateAvailable: 'Nueva versión {version} disponible',
+    noUpdateAvailable: 'Estás actualizado',
+    downloadUpdate: 'Descargar',
+    updateCheckFailed: 'Error al buscar actualizaciones',
+    installing: 'Instalando...',
+    changelog: 'Registro de cambios',
   },
   id: {
     // App
@@ -1001,6 +1065,22 @@ export const translations = {
     firstToken: 'Token pertama',
     streamRead: 'Baca stream',
     serverPort: 'Port server',
+
+    // Config restart
+    configSavedRestartPrompt: 'Konfigurasi disimpan. Mulai ulang server dengan pengaturan baru?',
+    restartServer: 'Mulai Ulang',
+    skipRestart: 'Nanti',
+
+    // About & Updates
+    about: 'Tentang',
+    checkForUpdates: 'Periksa Pembaruan',
+    checkingForUpdates: 'Memeriksa...',
+    updateAvailable: 'Versi baru {version} tersedia',
+    noUpdateAvailable: 'Anda sudah menggunakan versi terbaru',
+    downloadUpdate: 'Unduh',
+    updateCheckFailed: 'Gagal memeriksa pembaruan',
+    installing: 'Menginstal...',
+    changelog: 'Catatan perubahan',
   },
   pt: {
     // App
@@ -1202,6 +1282,22 @@ export const translations = {
     firstToken: 'Primeiro token',
     streamRead: 'Leitura do stream',
     serverPort: 'Porta do servidor',
+
+    // Config restart
+    configSavedRestartPrompt: 'Configuração salva. Reiniciar o servidor com as novas configurações?',
+    restartServer: 'Reiniciar',
+    skipRestart: 'Depois',
+
+    // About & Updates
+    about: 'Sobre',
+    checkForUpdates: 'Verificar atualizações',
+    checkingForUpdates: 'Verificando...',
+    updateAvailable: 'Nova versão {version} disponível',
+    noUpdateAvailable: 'Você está atualizado',
+    downloadUpdate: 'Baixar',
+    updateCheckFailed: 'Falha ao verificar atualizações',
+    installing: 'Instalando...',
+    changelog: 'Registro de alterações',
   },
   ja: {
     // App
@@ -1403,6 +1499,22 @@ export const translations = {
     firstToken: '最初のトークン',
     streamRead: 'ストリーム読み取り',
     serverPort: 'サーバーポート',
+
+    // Config restart
+    configSavedRestartPrompt: '設定を保存しました。新しい設定でサーバーを再起動しますか？',
+    restartServer: '再起動',
+    skipRestart: '後で',
+
+    // About & Updates
+    about: 'アプリについて',
+    checkForUpdates: 'アップデートを確認',
+    checkingForUpdates: '確認中...',
+    updateAvailable: '新しいバージョン {version} が利用可能です',
+    noUpdateAvailable: '最新バージョンです',
+    downloadUpdate: 'ダウンロード',
+    updateCheckFailed: 'アップデートの確認に失敗しました',
+    installing: 'インストール中...',
+    changelog: '変更履歴',
   },
   ko: {
     // App
@@ -1604,6 +1716,22 @@ export const translations = {
     firstToken: '첫 토큰',
     streamRead: '스트림 읽기',
     serverPort: '서버 포트',
+
+    // Config restart
+    configSavedRestartPrompt: '설정이 저장되었습니다. 새 설정으로 서버를 재시작하시겠습니까?',
+    restartServer: '재시작',
+    skipRestart: '나중에',
+
+    // About & Updates
+    about: '정보',
+    checkForUpdates: '업데이트 확인',
+    checkingForUpdates: '확인 중...',
+    updateAvailable: '새 버전 {version} 사용 가능',
+    noUpdateAvailable: '최신 버전입니다',
+    downloadUpdate: '다운로드',
+    updateCheckFailed: '업데이트 확인 실패',
+    installing: '설치 중...',
+    changelog: '변경 내역',
   },
 };
 

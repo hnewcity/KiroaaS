@@ -60,6 +60,12 @@ async fn check_for_updates(app: tauri::AppHandle) -> Result<bool, String> {
     }
 }
 
+/// Get the application version
+#[tauri::command]
+fn get_app_version(app: tauri::AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
 /// Install pending update and restart
 #[tauri::command]
 async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
@@ -239,6 +245,7 @@ fn main() {
             scan_all_credentials,
             check_for_updates,
             install_update,
+            get_app_version,
         ])
         .on_window_event(|event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event.event() {

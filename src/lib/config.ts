@@ -52,3 +52,5 @@ export interface ServerStatusInfo {
   port?: number;
   error?: string;
 }
+
+export const VERSION_CHECK_API = 'https://YOUR_API_ID.execute-api.ap-southeast-1.amazonaws.com/prod/version';

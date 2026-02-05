@@ -1,26 +1,50 @@
 import { useState, useEffect } from 'react';
 import { useI18n } from '@/hooks/useI18n';
+import { platform, arch } from '@tauri-apps/api/os';
 import type { AppConfig, AuthMethod } from '@/lib/config';
-import { scanAllCredentials, type CredentialScanResult } from '@/lib/tauri';
+import { VERSION_CHECK_API } from '@/lib/config';
+import { scanAllCredentials, type CredentialScanResult, installUpdate, getAppVersion } from '@/lib/tauri';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText } from 'lucide-react';
+import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText, Info } from 'lucide-react';
 import { Loader2 } from 'lucide-react';
 
 interface SettingsFormProps {
     config: AppConfig;
     onSave: (config: AppConfig) => Promise<void>;
+    isRunning?: boolean;
+    onRestart?: () => Promise<void>;
 }
 
-export function SettingsForm({ config, onSave }: SettingsFormProps) {
+export function SettingsForm({ config, onSave, isRunning, onRestart }: SettingsFormProps) {
     const { t } = useI18n();
     const [formData, setFormData] = useState<AppConfig>(config);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState(false);
+    const [showRestartPrompt, setShowRestartPrompt] = useState(false);
+    const [isRestarting, setIsRestarting] = useState(false);
     const [scanResult, setScanResult] = useState<CredentialScanResult | null>(null);
     const [showApiKey, setShowApiKey] = useState(false);
+
+    // Update check state
+    const [appVersion, setAppVersion] = useState('');
+    const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+    const [isInstalling, setIsInstalling] = useState(false);
+    const [updateInfo, setUpdateInfo] = useState<{
+        hasUpdate: boolean;
+        latestVersion?: string;
+        currentVersion?: string;
+        downloadUrl?: string;
+        changelog?: Array<{ version: string; changes: string[] }>;
+    } | null>(null);
+    const [updateError, setUpdateError] = useState<string | null>(null);
+
+    // Get app version on mount
+    useEffect(() => {
+        getAppVersion().then(setAppVersion).catch(console.error);
+    }, []);
 
     // Auto-scan on mount
     useEffect(() => {
@@ -55,12 +79,36 @@ export function SettingsForm({ config, onSave }: SettingsFormProps) {
         try {
             await onSave(formData);
             setSuccess(true);
-            setTimeout(() => setSuccess(false), 3000);
+            // If server is running, show restart prompt
+            if (isRunning && onRestart) {
+                setShowRestartPrompt(true);
+            } else {
+                setTimeout(() => setSuccess(false), 3000);
+            }
         } catch (err) {
             setError(err instanceof Error ? err.message : t('saveFailed'));
         } finally {
             setIsSaving(false);
         }
+    };
+
+    const handleRestart = async () => {
+        if (!onRestart) return;
+        setIsRestarting(true);
+        try {
+            await onRestart();
+            setShowRestartPrompt(false);
+            setSuccess(false);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : t('startServerFailed'));
+        } finally {
+            setIsRestarting(false);
+        }
+    };
+
+    const handleSkipRestart = () => {
+        setShowRestartPrompt(false);
+        setTimeout(() => setSuccess(false), 3000);
     };
 
     const updateField = <K extends keyof AppConfig>(
@@ -74,6 +122,56 @@ export function SettingsForm({ config, onSave }: SettingsFormProps) {
         const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
         const key = Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
         updateField('proxy_api_key', `sk-${key}`);
+    };
+
+    const handleCheckUpdate = async () => {
+        setIsCheckingUpdate(true);
+        setUpdateError(null);
+        setUpdateInfo(null);
+
+        try {
+            // Get or create client ID for tracking
+            let clientId = localStorage.getItem('kiroaas_client_id');
+            if (!clientId) {
+                clientId = crypto.randomUUID();
+                localStorage.setItem('kiroaas_client_id', clientId);
+            }
+
+            // Get platform and arch dynamically
+            const currentPlatform = await platform();
+            const currentArch = await arch();
+
+            const response = await fetch(VERSION_CHECK_API, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    currentVersion: appVersion,
+                    platform: currentPlatform,
+                    arch: currentArch,
+                    clientId,
+                    trigger: 'manual',
+                }),
+            });
+            const data = await response.json();
+            setUpdateInfo(data);
+        } catch (err) {
+            setUpdateError(t('updateCheckFailed'));
+        } finally {
+            setIsCheckingUpdate(false);
+        }
+    };
+
+    const handleInstallUpdate = async () => {
+        setIsInstalling(true);
+        try {
+            await installUpdate();
+        } catch (err) {
+            setUpdateError(t('updateCheckFailed'));
+        } finally {
+            setIsInstalling(false);
+        }
     };
 
     return (
@@ -241,6 +339,89 @@ export function SettingsForm({ config, onSave }: SettingsFormProps) {
                 </div>
             </div>
 
+            {/* 3. About Section */}
+            <div className="space-y-6 pt-4">
+                <div className="flex items-center gap-3 pb-2 border-b border-stone-100">
+                    <div className="h-10 w-10 rounded-full bg-stone-100 flex items-center justify-center">
+                        <Info className="h-5 w-5 text-stone-600" />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-[#111]">{t('about')}</h3>
+                        <p className="text-sm text-stone-500">v{appVersion}</p>
+                    </div>
+                </div>
+
+                <div className="bg-[#F8F8F8] p-6 rounded-[24px] space-y-4">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            {updateInfo?.hasUpdate && (
+                                <p className="text-sm text-lime-600 font-medium">
+                                    {t('updateAvailable').replace('{version}', updateInfo.latestVersion || '')}
+                                </p>
+                            )}
+                            {updateInfo && !updateInfo.hasUpdate && (
+                                <p className="text-sm text-stone-500">{t('noUpdateAvailable')}</p>
+                            )}
+                            {updateError && (
+                                <p className="text-sm text-red-500">{updateError}</p>
+                            )}
+                        </div>
+                        <div className="flex gap-3">
+                            {updateInfo?.hasUpdate && (
+                                <Button
+                                    type="button"
+                                    onClick={handleInstallUpdate}
+                                    disabled={isInstalling}
+                                    className="h-10 px-4 rounded-xl bg-lime-500 hover:bg-lime-600 text-black"
+                                >
+                                    {isInstalling ? (
+                                        <>
+                                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                            {t('installing')}
+                                        </>
+                                    ) : (
+                                        t('downloadUpdate')
+                                    )}
+                                </Button>
+                            )}
+                            <Button
+                                type="button"
+                                variant="outline"
+                                onClick={handleCheckUpdate}
+                                disabled={isCheckingUpdate}
+                                className="h-10 px-4 rounded-xl"
+                            >
+                                {isCheckingUpdate ? (
+                                    <>
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        {t('checkingForUpdates')}
+                                    </>
+                                ) : (
+                                    t('checkForUpdates')
+                                )}
+                            </Button>
+                        </div>
+                    </div>
+                    {updateInfo?.hasUpdate && updateInfo.changelog && updateInfo.changelog.length > 0 && (
+                        <div className="border-t border-stone-200 pt-4 mt-4">
+                            <p className="text-sm font-semibold text-[#111] mb-3">{t('changelog')}</p>
+                            <div className="space-y-3 max-h-48 overflow-y-auto">
+                                {updateInfo.changelog.map((entry) => (
+                                    <div key={entry.version} className="text-sm">
+                                        <p className="font-medium text-stone-700">v{entry.version}</p>
+                                        <ul className="list-disc list-inside text-stone-500 ml-2">
+                                            {entry.changes.map((change, idx) => (
+                                                <li key={idx}>{change}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+
             {/* Action Bar */}
             <div className="rounded-xl pt-6 flex justify-end gap-4">
                 {error && (
@@ -249,10 +430,39 @@ export function SettingsForm({ config, onSave }: SettingsFormProps) {
                         {error}
                     </div>
                 )}
-                {success && (
+                {success && !showRestartPrompt && (
                     <div className="flex items-center text-lime-700 bg-lime-100 px-4 py-2 rounded-full text-sm font-medium animate-in fade-in">
                         <CheckCircle className="w-4 h-4 mr-2" />
                         {t('savedSuccessfully')}
+                    </div>
+                )}
+                {showRestartPrompt && (
+                    <div className="flex items-center gap-3 animate-in fade-in">
+                        <span className="text-sm text-stone-600">{t('configSavedRestartPrompt')}</span>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={handleSkipRestart}
+                            disabled={isRestarting}
+                            className="h-10 px-4 rounded-full"
+                        >
+                            {t('skipRestart')}
+                        </Button>
+                        <Button
+                            type="button"
+                            onClick={handleRestart}
+                            disabled={isRestarting}
+                            className="h-10 px-6 rounded-full bg-lime-500 hover:bg-lime-600 text-black font-semibold"
+                        >
+                            {isRestarting ? (
+                                <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    {t('starting')}
+                                </>
+                            ) : (
+                                t('restartServer')
+                            )}
+                        </Button>
                     </div>
                 )}
 

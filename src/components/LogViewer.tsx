@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useI18n } from '@/hooks/useI18n';
 import { clearServerLogs } from '@/lib/tauri';
+import { save } from '@tauri-apps/api/dialog';
+import { writeTextFile } from '@tauri-apps/api/fs';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
@@ -43,15 +45,19 @@ export function LogViewer({ logs = [], onLogsCleared }: LogViewerProps) {
         }
     };
 
-    const handleExport = () => {
-        const logText = logs.map(stripAnsi).join('\n');
-        const blob = new Blob([logText], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `kiro-gateway-logs-${Date.now()}.txt`;
-        a.click();
-        URL.revokeObjectURL(url);
+    const handleExport = async () => {
+        try {
+            const filePath = await save({
+                defaultPath: `kiro-gateway-logs-${Date.now()}.txt`,
+                filters: [{ name: 'Text Files', extensions: ['txt'] }]
+            });
+            if (filePath) {
+                const logText = logs.map(stripAnsi).join('\n');
+                await writeTextFile(filePath, logText);
+            }
+        } catch (err) {
+            console.error('Failed to export logs:', err);
+        }
     };
 
     return (
