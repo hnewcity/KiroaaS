@@ -163,6 +163,15 @@ export const translations = {
     chatServerOfflineDesc: '请先启动服务器',
     chatError: '发送消息失败',
 
+    // Conversations
+    newChat: '新对话',
+    conversations: '对话历史',
+    renameConversation: '重命名对话',
+    deleteConversation: '删除对话',
+    deleteConfirm: '确定删除此对话？',
+    noConversations: '暂无对话',
+    untitledConversation: '无标题对话',
+
     // CC Switch Import
     ccSwitchImport: '导入到 CC Switch',
     ccSwitchIntro: 'CC Switch 是一个 Claude Code 配置管理工具，可以快速切换不同的 API Provider。',
@@ -375,6 +384,15 @@ export const translations = {
     chatServerOffline: 'Server offline',
     chatServerOfflineDesc: 'Please start the server first',
     chatError: 'Failed to send message',
+
+    // Conversations
+    newChat: 'New Chat',
+    conversations: 'Conversations',
+    renameConversation: 'Rename conversation',
+    deleteConversation: 'Delete conversation',
+    deleteConfirm: 'Delete this conversation?',
+    noConversations: 'No conversations yet',
+    untitledConversation: 'Untitled conversation',
 
     // CC Switch Import
     ccSwitchImport: 'Import to CC Switch',
@@ -591,6 +609,15 @@ export const translations = {
     chatServerOffline: 'Сервер офлайн',
     chatServerOfflineDesc: 'Сначала запустите сервер',
     chatError: 'Не удалось отправить сообщение',
+
+    // Conversations
+    newChat: 'Новый чат',
+    conversations: 'Разговоры',
+    renameConversation: 'Переименовать разговор',
+    deleteConversation: 'Удалить разговор',
+    deleteConfirm: 'Удалить этот разговор?',
+    noConversations: 'Пока нет разговоров',
+    untitledConversation: 'Без названия',
 
     // CC Switch Import
     ccSwitchImport: 'Импорт в CC Switch',
@@ -809,6 +836,15 @@ export const translations = {
     chatServerOfflineDesc: 'Por favor, inicia el servidor primero',
     chatError: 'Error al enviar mensaje',
 
+    // Conversations
+    newChat: 'Nuevo chat',
+    conversations: 'Conversaciones',
+    renameConversation: 'Renombrar conversación',
+    deleteConversation: 'Eliminar conversación',
+    deleteConfirm: '¿Eliminar esta conversación?',
+    noConversations: 'Sin conversaciones aún',
+    untitledConversation: 'Conversación sin título',
+
     // CC Switch Import
     ccSwitchImport: 'Importar a CC Switch',
     ccSwitchIntro: 'CC Switch es un gestor de configuración de Claude Code que permite cambiar rápidamente entre diferentes proveedores de API.',
@@ -1025,6 +1061,15 @@ export const translations = {
     chatServerOffline: 'Server offline',
     chatServerOfflineDesc: 'Silakan mulai server terlebih dahulu',
     chatError: 'Gagal mengirim pesan',
+
+    // Conversations
+    newChat: 'Obrolan Baru',
+    conversations: 'Percakapan',
+    renameConversation: 'Ubah nama percakapan',
+    deleteConversation: 'Hapus percakapan',
+    deleteConfirm: 'Hapus percakapan ini?',
+    noConversations: 'Belum ada percakapan',
+    untitledConversation: 'Percakapan tanpa judul',
 
     // CC Switch Import
     ccSwitchImport: 'Impor ke CC Switch',
@@ -1243,6 +1288,15 @@ export const translations = {
     chatServerOfflineDesc: 'Por favor, inicie o servidor primeiro',
     chatError: 'Falha ao enviar mensagem',
 
+    // Conversations
+    newChat: 'Novo Chat',
+    conversations: 'Conversas',
+    renameConversation: 'Renomear conversa',
+    deleteConversation: 'Excluir conversa',
+    deleteConfirm: 'Excluir esta conversa?',
+    noConversations: 'Nenhuma conversa ainda',
+    untitledConversation: 'Conversa sem título',
+
     // CC Switch Import
     ccSwitchImport: 'Importar para CC Switch',
     ccSwitchIntro: 'CC Switch é um gerenciador de configuração do Claude Code que permite alternar rapidamente entre diferentes provedores de API.',
@@ -1460,6 +1514,15 @@ export const translations = {
     chatServerOfflineDesc: '先にサーバーを起動してください',
     chatError: 'メッセージの送信に失敗しました',
 
+    // Conversations
+    newChat: '新しいチャット',
+    conversations: '会話履歴',
+    renameConversation: '会話の名前を変更',
+    deleteConversation: '会話を削除',
+    deleteConfirm: 'この会話を削除しますか？',
+    noConversations: '会話がありません',
+    untitledConversation: '無題の会話',
+
     // CC Switch Import
     ccSwitchImport: 'CC Switch にインポート',
     ccSwitchIntro: 'CC Switch は Claude Code の設定マネージャーで、異なる API プロバイダー間を素早く切り替えることができます。',
@@ -1676,6 +1739,15 @@ export const translations = {
     chatServerOffline: '서버 오프라인',
     chatServerOfflineDesc: '먼저 서버를 시작하세요',
     chatError: '메시지 전송 실패',
+
+    // Conversations
+    newChat: '새 채팅',
+    conversations: '대화 목록',
+    renameConversation: '대화 이름 변경',
+    deleteConversation: '대화 삭제',
+    deleteConfirm: '이 대화를 삭제하시겠습니까?',
+    noConversations: '대화가 없습니다',
+    untitledConversation: '제목 없는 대화',
 
     // CC Switch Import
     ccSwitchImport: 'CC Switch로 가져오기',

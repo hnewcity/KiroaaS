@@ -2,9 +2,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
+mod conversations;
 mod server;
 
 use config::{AppConfig, load_config, save_config};
+use conversations::{Conversation, ConversationsData, load_conversations, save_conversations};
 use server::{ServerManager, ServerStatus};
 use tauri::{Manager, State};
 use tokio::sync::Mutex;
@@ -227,6 +229,58 @@ async fn scan_all_credentials() -> Result<CredentialScanResult, String> {
     })
 }
 
+/// Load conversations from disk
+#[tauri::command]
+async fn load_conversations_cmd() -> Result<ConversationsData, String> {
+    load_conversations().await
+}
+
+/// Save conversations to disk
+#[tauri::command]
+async fn save_conversations_cmd(data: ConversationsData) -> Result<(), String> {
+    save_conversations(&data).await
+}
+
+/// Create a new conversation
+#[tauri::command]
+async fn create_conversation(conversation: Conversation) -> Result<(), String> {
+    let mut data = load_conversations().await?;
+    data.conversations.insert(0, conversation);
+    save_conversations(&data).await
+}
+
+/// Update an existing conversation
+#[tauri::command]
+async fn update_conversation(conversation: Conversation) -> Result<(), String> {
+    let mut data = load_conversations().await?;
+    if let Some(pos) = data.conversations.iter().position(|c| c.id == conversation.id) {
+        data.conversations[pos] = conversation;
+        save_conversations(&data).await
+    } else {
+        Err("Conversation not found".to_string())
+    }
+}
+
+/// Delete a conversation
+#[tauri::command]
+async fn delete_conversation(id: String) -> Result<(), String> {
+    let mut data = load_conversations().await?;
+    data.conversations.retain(|c| c.id != id);
+    save_conversations(&data).await
+}
+
+/// Rename a conversation
+#[tauri::command]
+async fn rename_conversation(id: String, title: String) -> Result<(), String> {
+    let mut data = load_conversations().await?;
+    if let Some(conv) = data.conversations.iter_mut().find(|c| c.id == id) {
+        conv.title = title;
+        save_conversations(&data).await
+    } else {
+        Err("Conversation not found".to_string())
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(AppState {
@@ -246,6 +300,12 @@ fn main() {
             check_for_updates,
             install_update,
             get_app_version,
+            load_conversations_cmd,
+            save_conversations_cmd,
+            create_conversation,
+            update_conversation,
+            delete_conversation,
+            rename_conversation,
         ])
         .on_window_event(|event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event.event() {

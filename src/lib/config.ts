@@ -53,4 +53,4 @@ export interface ServerStatusInfo {
   error?: string;
 }
 
-export const VERSION_CHECK_API = 'https://YOUR_API_ID.execute-api.ap-southeast-1.amazonaws.com/prod/version';
+export const VERSION_CHECK_API = 'https://api.kiroaas.hnew.city/version';

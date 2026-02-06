@@ -13,6 +13,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useI18n } from '@/hooks/useI18n';
+import { ConversationSidebar } from './ConversationSidebar';
+import type { Conversation } from '@/lib/conversations';
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -50,10 +52,29 @@ interface ChatViewProps {
   apiKey: string;
   isRunning: boolean;
   messages: Message[];
-  onMessagesChange: React.Dispatch<React.SetStateAction<Message[]>>;
+  onMessagesChange: (messages: Message[]) => void;
+  conversations: Conversation[];
+  currentConversationId: string | null;
+  onSelectConversation: (id: string | null) => void;
+  onNewChat: () => void;
+  onDeleteConversation: (id: string) => void;
+  onRenameConversation: (id: string, title: string) => void;
 }
 
-export function ChatView({ host, port, apiKey, isRunning, messages, onMessagesChange }: ChatViewProps) {
+export function ChatView({
+  host,
+  port,
+  apiKey,
+  isRunning,
+  messages,
+  onMessagesChange,
+  conversations,
+  currentConversationId,
+  onSelectConversation,
+  onNewChat,
+  onDeleteConversation,
+  onRenameConversation,
+}: ChatViewProps) {
   const { t } = useI18n();
   const [input, setInput] = useState('');
   const [images, setImages] = useState<string[]>([]);
@@ -120,7 +141,8 @@ export function ChatView({ host, port, apiKey, isRunning, messages, onMessagesCh
     }
 
     const userMessage: Message = { role: 'user', content: userContent };
-    onMessagesChange(prev => [...prev, userMessage]);
+    const newMessages = [...messages, userMessage];
+    onMessagesChange(newMessages);
     setInput('');
     setImages([]);
     setIsLoading(true);
@@ -134,7 +156,7 @@ export function ChatView({ host, port, apiKey, isRunning, messages, onMessagesCh
         },
         body: JSON.stringify({
           model,
-          messages: [...messages, userMessage].map(m => ({
+          messages: newMessages.map(m => ({
             role: m.role,
             content: m.content,
           })),
@@ -152,6 +174,7 @@ export function ChatView({ host, port, apiKey, isRunning, messages, onMessagesCh
       const decoder = new TextDecoder();
       let assistantContent = '';
       let messageAdded = false;
+      let currentMessages = newMessages;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -171,17 +194,15 @@ export function ChatView({ host, port, apiKey, isRunning, messages, onMessagesCh
               if (content) {
                 assistantContent += content;
                 if (!messageAdded) {
-                  onMessagesChange(prev => [...prev, { role: 'assistant', content: assistantContent }]);
+                  currentMessages = [...currentMessages, { role: 'assistant', content: assistantContent }];
+                  onMessagesChange(currentMessages);
                   messageAdded = true;
                 } else {
-                  onMessagesChange(prev => {
-                    const newMessages = [...prev];
-                    newMessages[newMessages.length - 1] = {
-                      role: 'assistant',
-                      content: assistantContent,
-                    };
-                    return newMessages;
-                  });
+                  currentMessages = [
+                    ...currentMessages.slice(0, -1),
+                    { role: 'assistant', content: assistantContent },
+                  ];
+                  onMessagesChange(currentMessages);
                 }
               }
             } catch {
@@ -192,8 +213,8 @@ export function ChatView({ host, port, apiKey, isRunning, messages, onMessagesCh
       }
     } catch (error) {
       console.error('Chat error:', error);
-      onMessagesChange(prev => [
-        ...prev,
+      onMessagesChange([
+        ...newMessages,
         {
           role: 'assistant',
           content: t('chatError') + ': ' + (error instanceof Error ? error.message : 'Unknown error'),
@@ -237,20 +258,32 @@ export function ChatView({ host, port, apiKey, isRunning, messages, onMessagesCh
   ];
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header: clear button only */}
-      {messages.length > 0 && (
-        <div className="flex items-center justify-end px-4 py-2">
-          <button
-            type="button"
-            onClick={clearChat}
-            className="text-xs text-stone-400 hover:text-stone-600 transition-colors flex items-center gap-1 px-3 py-1.5 rounded-full hover:bg-white/50"
-          >
-            <Trash2 className="h-3 w-3" />
-            {t('clear')}
-          </button>
-        </div>
-      )}
+    <div className="flex h-full gap-3">
+      {/* Conversation Sidebar */}
+      <ConversationSidebar
+        conversations={conversations}
+        currentConversationId={currentConversationId}
+        onSelectConversation={onSelectConversation}
+        onNewChat={onNewChat}
+        onDeleteConversation={onDeleteConversation}
+        onRenameConversation={onRenameConversation}
+      />
+
+      {/* Chat Area */}
+      <div className="flex-1 flex flex-col bg-white rounded-[24px] overflow-hidden">
+        {/* Header: clear button only */}
+        {messages.length > 0 && (
+          <div className="flex items-center justify-end px-4 py-2">
+            <button
+              type="button"
+              onClick={clearChat}
+              className="text-xs text-stone-400 hover:text-stone-600 transition-colors flex items-center gap-1 px-3 py-1.5 rounded-full hover:bg-stone-100"
+            >
+              <Trash2 className="h-3 w-3" />
+              {t('clear')}
+            </button>
+          </div>
+        )}
 
       {/* Messages Area */}
       <div className={`flex-1 px-4 ${messages.length > 0 ? 'overflow-y-auto' : 'flex items-center justify-center'}`}>
@@ -486,6 +519,7 @@ export function ChatView({ host, port, apiKey, isRunning, messages, onMessagesCh
             </div>
           </form>
         </div>
+      </div>
       </div>
     </div>
   );

@@ -5,10 +5,11 @@ import { LogViewer } from './components/LogViewer';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { ApiExamples } from './components/ApiExamples';
 import { CCSwitchImport } from './components/CCSwitchImport';
-import { ChatView, Message } from './components/ChatView';
+import { ChatView } from './components/ChatView';
 import { useConfig } from './hooks/useConfig';
 import { useI18n } from './hooks/useI18n';
 import { useServerStatus } from './hooks/useServerStatus';
+import { useConversations } from './hooks/useConversations';
 import { startServer, stopServer, getServerLogs } from './lib/tauri';
 
 // UI Components
@@ -35,10 +36,19 @@ export default function App() {
   const { config, saveConfig, isLoading: isConfigLoading, error: configError } = useConfig();
   const { status } = useServerStatus();
   const { t } = useI18n();
+  const {
+    conversations,
+    currentConversationId,
+    messages,
+    updateMessages,
+    deleteConversation,
+    renameConversation,
+    selectConversation,
+    startNewChat,
+  } = useConversations();
 
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [logs, setLogs] = useState<string[]>([]);
-  const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [pendingAction, setPendingAction] = useState<'start' | 'stop' | null>(null);
   const [tempConfig, setTempConfig] = useState(config);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -448,8 +458,14 @@ export default function App() {
                   port={config.server_port}
                   apiKey={config.proxy_api_key}
                   isRunning={isRunning}
-                  messages={chatMessages}
-                  onMessagesChange={setChatMessages}
+                  messages={messages}
+                  onMessagesChange={updateMessages}
+                  conversations={conversations}
+                  currentConversationId={currentConversationId}
+                  onSelectConversation={selectConversation}
+                  onNewChat={startNewChat}
+                  onDeleteConversation={deleteConversation}
+                  onRenameConversation={renameConversation}
                 />
               </div>
             )}

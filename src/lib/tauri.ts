@@ -65,3 +65,30 @@ export async function installUpdate(): Promise<void> {
 export async function getAppVersion(): Promise<string> {
   return await invoke('get_app_version');
 }
+
+// Conversation management
+import type { Conversation, ConversationsData } from './conversations';
+
+export async function loadConversations(): Promise<ConversationsData> {
+  return await invoke('load_conversations_cmd');
+}
+
+export async function saveConversations(data: ConversationsData): Promise<void> {
+  return await invoke('save_conversations_cmd', { data });
+}
+
+export async function createConversation(conversation: Conversation): Promise<void> {
+  return await invoke('create_conversation', { conversation });
+}
+
+export async function updateConversation(conversation: Conversation): Promise<void> {
+  return await invoke('update_conversation', { conversation });
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  return await invoke('delete_conversation', { id });
+}
+
+export async function renameConversation(id: string, title: string): Promise<void> {
+  return await invoke('rename_conversation', { id, title });
+}
