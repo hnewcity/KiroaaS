@@ -1,11 +1,10 @@
-# KiroaaS
-
 <p align="center">
   <img src="public/icon.png" alt="KiroaaS Logo" width="128" height="128">
 </p>
-
+<h1 align="center">KiroaaS</h1>
 <h3 align="center">Kiro as a Service</h3>
 <p align="center">Turn Kiro into an OpenAI-compatible and Anthropic-compatible API with one click</p>
+<p align="center">Powered by https://github.com/jwadow/kiro-gateway</p>
 
 <p align="center">
   🇺🇸 English • <a href="docs/README_zh.md">🇨🇳 中文</a> • <a href="docs/README_ja.md">🇯🇵 日本語</a> • <a href="docs/README_ko.md">🇰🇷 한국어</a> • <a href="docs/README_ru.md">🇷🇺 Русский</a> • <a href="docs/README_es.md">🇪🇸 Español</a> • <a href="docs/README_pt.md">🇧🇷 Português</a> • <a href="docs/README_id.md">🇮🇩 Indonesia</a>
