@@ -1,23 +1,25 @@
 import { useState, useEffect } from 'react';
 import { useI18n } from '@/hooks/useI18n';
-import { platform, arch } from '@tauri-apps/api/os';
 import type { AppConfig, AuthMethod } from '@/lib/config';
-import { VERSION_CHECK_API } from '@/lib/config';
 import { scanAllCredentials, type CredentialScanResult, installUpdate, getAppVersion } from '@/lib/tauri';
+import { checkVersionUpdate, type UpdateInfo } from '@/lib/versionCheck';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText, Info } from 'lucide-react';
+import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText } from 'lucide-react';
 import { Loader2 } from 'lucide-react';
+
+export type SettingsHintKey = 'auth_cli_db' | 'auth_creds_file' | 'auth_refresh_token' | 'proxy_api_key' | 'generate' | 'check_update' | 'save' | null;
 
 interface SettingsFormProps {
     config: AppConfig;
     onSave: (config: AppConfig) => Promise<void>;
     isRunning?: boolean;
     onRestart?: () => Promise<void>;
+    onHintChange?: (hint: SettingsHintKey) => void;
 }
 
-export function SettingsForm({ config, onSave, isRunning, onRestart }: SettingsFormProps) {
+export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChange }: SettingsFormProps) {
     const { t } = useI18n();
     const [formData, setFormData] = useState<AppConfig>(config);
     const [isSaving, setIsSaving] = useState(false);
@@ -32,13 +34,7 @@ export function SettingsForm({ config, onSave, isRunning, onRestart }: SettingsF
     const [appVersion, setAppVersion] = useState('');
     const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
     const [isInstalling, setIsInstalling] = useState(false);
-    const [updateInfo, setUpdateInfo] = useState<{
-        hasUpdate: boolean;
-        latestVersion?: string;
-        currentVersion?: string;
-        downloadUrl?: string;
-        changelog?: Array<{ version: string; changes: string[] }>;
-    } | null>(null);
+    const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
     const [updateError, setUpdateError] = useState<string | null>(null);
 
     // Get app version on mount
@@ -130,32 +126,12 @@ export function SettingsForm({ config, onSave, isRunning, onRestart }: SettingsF
         setUpdateInfo(null);
 
         try {
-            // Get or create client ID for tracking
-            let clientId = localStorage.getItem('kiroaas_client_id');
-            if (!clientId) {
-                clientId = crypto.randomUUID();
-                localStorage.setItem('kiroaas_client_id', clientId);
+            const data = await checkVersionUpdate(config, 'manual');
+            if (data) {
+                setUpdateInfo(data);
+            } else {
+                setUpdateError(t('updateCheckFailed'));
             }
-
-            // Get platform and arch dynamically
-            const currentPlatform = await platform();
-            const currentArch = await arch();
-
-            const response = await fetch(VERSION_CHECK_API, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    currentVersion: appVersion,
-                    platform: currentPlatform,
-                    arch: currentArch,
-                    clientId,
-                    trigger: 'manual',
-                }),
-            });
-            const data = await response.json();
-            setUpdateInfo(data);
         } catch (err) {
             setUpdateError(t('updateCheckFailed'));
         } finally {
@@ -173,6 +149,9 @@ export function SettingsForm({ config, onSave, isRunning, onRestart }: SettingsF
             setIsInstalling(false);
         }
     };
+
+    const hintEnter = (key: SettingsHintKey) => () => onHintChange?.(key);
+    const hintLeave = () => onHintChange?.(null);
 
     return (
         <form onSubmit={handleSubmit} className="space-y-8">
@@ -192,13 +171,15 @@ export function SettingsForm({ config, onSave, isRunning, onRestart }: SettingsF
                 {/* Grid of Auth Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     {[
-                        { id: 'cli_db', icon: Database, label: t('authCliDb') },
-                        { id: 'creds_file', icon: FileText, label: t('authCredsFile') },
-                        { id: 'refresh_token', icon: Key, label: t('authRefreshToken') },
+                        { id: 'cli_db', icon: Database, label: t('authCliDb'), hint: 'auth_cli_db' as SettingsHintKey },
+                        { id: 'creds_file', icon: FileText, label: t('authCredsFile'), hint: 'auth_creds_file' as SettingsHintKey },
+                        { id: 'refresh_token', icon: Key, label: t('authRefreshToken'), hint: 'auth_refresh_token' as SettingsHintKey },
                     ].map((option) => (
                         <div
                             key={option.id}
                             onClick={() => updateField('auth_method', option.id as AuthMethod)}
+                            onMouseEnter={hintEnter(option.hint)}
+                            onMouseLeave={hintLeave}
                             className={`cursor-pointer relative p-4 rounded-2xl border-2 transition-all duration-200 flex flex-col gap-3 hover:border-black/10 hover:bg-stone-50 ${formData.auth_method === option.id
                                     ? 'border-black bg-stone-50'
                                     : 'border-transparent bg-[#F8F8F8]'
@@ -313,7 +294,7 @@ export function SettingsForm({ config, onSave, isRunning, onRestart }: SettingsF
                             </button>
                         </div>
                         <div className="flex gap-3">
-                            <div className="relative flex-1">
+                            <div className="relative flex-1" onMouseEnter={hintEnter('proxy_api_key')} onMouseLeave={hintLeave}>
                                 <Input
                                     type={showApiKey ? "text" : "password"}
                                     value={formData.proxy_api_key || ''}
@@ -326,6 +307,8 @@ export function SettingsForm({ config, onSave, isRunning, onRestart }: SettingsF
                                 type="button"
                                 variant="outline"
                                 onClick={generateApiKey}
+                                onMouseEnter={hintEnter('generate')}
+                                onMouseLeave={hintLeave}
                                 className="h-12 px-6 rounded-xl border-stone-200 hover:bg-white hover:border-black hover:text-black transition-all"
                             >
                                 <Shuffle className="mr-2 h-4 w-4" />
@@ -341,42 +324,53 @@ export function SettingsForm({ config, onSave, isRunning, onRestart }: SettingsF
 
             {/* 3. About Section */}
             <div className="space-y-6 pt-4">
-                <div className="flex items-center gap-3 pb-2 border-b border-stone-100">
-                    <div className="h-10 w-10 rounded-full bg-stone-100 flex items-center justify-center">
-                        <Info className="h-5 w-5 text-stone-600" />
-                    </div>
-                    <div>
-                        <h3 className="text-lg font-bold text-[#111]">{t('about')}</h3>
-                        <p className="text-sm text-stone-500">v{appVersion}</p>
-                    </div>
-                </div>
-
-                <div className="bg-[#F8F8F8] p-6 rounded-[24px] space-y-4">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            {updateInfo?.hasUpdate && (
-                                <p className="text-sm text-lime-600 font-medium">
-                                    {t('updateAvailable').replace('{version}', updateInfo.latestVersion || '')}
-                                </p>
-                            )}
-                            {updateInfo && !updateInfo.hasUpdate && (
-                                <p className="text-sm text-stone-500">{t('noUpdateAvailable')}</p>
-                            )}
-                            {updateError && (
-                                <p className="text-sm text-red-500">{updateError}</p>
-                            )}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Version Card */}
+                    <div className="bg-[#111] text-white p-6 rounded-[24px] flex flex-col justify-between relative overflow-hidden">
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-stone-800 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 opacity-60" />
+                        <div className="relative z-10">
+                            <span className="text-stone-400 font-semibold text-[10px] tracking-wider uppercase">{t('about')}</span>
+                            <div className="text-3xl font-bold tracking-tight mt-1">v{appVersion}</div>
+                            <p className="text-stone-400 text-xs mt-2 font-medium">KiroaaS</p>
                         </div>
-                        <div className="flex gap-3">
+                    </div>
+
+                    {/* Update Check Card */}
+                    <div
+                        className={`p-6 rounded-[24px] flex flex-col justify-between ${updateInfo?.hasUpdate ? 'bg-[#EBFD93]' : 'bg-[#F8F8F8]'}`}
+                        onMouseEnter={hintEnter('check_update')}
+                        onMouseLeave={hintLeave}
+                    >
+                        <div>
+                            <span className={`font-semibold text-[10px] tracking-wider uppercase ${updateInfo?.hasUpdate ? 'text-lime-800' : 'text-stone-400'}`}>
+                                {t('checkForUpdates')}
+                            </span>
+                            <div className="mt-1">
+                                {updateInfo?.hasUpdate ? (
+                                    <p className="text-lg font-bold text-lime-950">
+                                        v{updateInfo.latestVersion}
+                                    </p>
+                                ) : updateInfo && !updateInfo.hasUpdate ? (
+                                    <p className="text-sm font-medium text-stone-500 mt-1">{t('noUpdateAvailable')}</p>
+                                ) : updateError ? (
+                                    <p className="text-sm text-red-500 mt-1">{updateError}</p>
+                                ) : (
+                                    <p className="text-sm text-stone-400 mt-1">{t('checkForUpdates')}</p>
+                                )}
+                            </div>
+                        </div>
+                        <div className="flex gap-2 mt-4">
                             {updateInfo?.hasUpdate && (
                                 <Button
                                     type="button"
                                     onClick={handleInstallUpdate}
                                     disabled={isInstalling}
-                                    className="h-10 px-4 rounded-xl bg-lime-500 hover:bg-lime-600 text-black"
+                                    size="sm"
+                                    className="rounded-xl bg-black text-white hover:bg-stone-800 text-xs"
                                 >
                                     {isInstalling ? (
                                         <>
-                                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                                             {t('installing')}
                                         </>
                                     ) : (
@@ -386,14 +380,15 @@ export function SettingsForm({ config, onSave, isRunning, onRestart }: SettingsF
                             )}
                             <Button
                                 type="button"
-                                variant="outline"
+                                variant={updateInfo?.hasUpdate ? 'outline' : 'default'}
                                 onClick={handleCheckUpdate}
                                 disabled={isCheckingUpdate}
-                                className="h-10 px-4 rounded-xl"
+                                size="sm"
+                                className={`rounded-xl text-xs ${updateInfo?.hasUpdate ? 'border-lime-800/20 text-lime-950 hover:bg-lime-200/50' : 'bg-[#111] text-white hover:bg-black'}`}
                             >
                                 {isCheckingUpdate ? (
                                     <>
-                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                                         {t('checkingForUpdates')}
                                     </>
                                 ) : (
@@ -402,24 +397,26 @@ export function SettingsForm({ config, onSave, isRunning, onRestart }: SettingsF
                             </Button>
                         </div>
                     </div>
-                    {updateInfo?.hasUpdate && updateInfo.changelog && updateInfo.changelog.length > 0 && (
-                        <div className="border-t border-stone-200 pt-4 mt-4">
-                            <p className="text-sm font-semibold text-[#111] mb-3">{t('changelog')}</p>
-                            <div className="space-y-3 max-h-48 overflow-y-auto">
-                                {updateInfo.changelog.map((entry) => (
-                                    <div key={entry.version} className="text-sm">
-                                        <p className="font-medium text-stone-700">v{entry.version}</p>
-                                        <ul className="list-disc list-inside text-stone-500 ml-2">
-                                            {entry.changes.map((change, idx) => (
-                                                <li key={idx}>{change}</li>
-                                            ))}
-                                        </ul>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
                 </div>
+
+                {/* Changelog */}
+                {updateInfo?.hasUpdate && updateInfo.changelog && updateInfo.changelog.length > 0 && (
+                    <div className="bg-[#F8F8F8] p-6 rounded-[24px]">
+                        <p className="text-sm font-semibold text-[#111] mb-3">{t('changelog')}</p>
+                        <div className="space-y-3 max-h-48 overflow-y-auto">
+                            {updateInfo.changelog.map((entry) => (
+                                <div key={entry.version} className="text-sm">
+                                    <p className="font-medium text-stone-700">v{entry.version}</p>
+                                    <ul className="list-disc list-inside text-stone-500 ml-2">
+                                        {entry.changes.map((change, idx) => (
+                                            <li key={idx}>{change}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Action Bar */}
@@ -469,6 +466,8 @@ export function SettingsForm({ config, onSave, isRunning, onRestart }: SettingsF
                 <Button
                     type="submit"
                     disabled={isSaving}
+                    onMouseEnter={hintEnter('save')}
+                    onMouseLeave={hintLeave}
                     className="h-14 px-8 rounded-full bg-[#111] hover:bg-black text-white text-base font-semibold shadow-xl shadow-black/10 transition-transform active:scale-95"
                 >
                     {isSaving ? (

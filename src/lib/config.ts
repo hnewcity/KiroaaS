@@ -30,6 +30,9 @@ export interface AppConfig {
   truncation_recovery: boolean;
   log_level: string;
   debug_mode: string;
+
+  // Client identity
+  client_id?: string;
 }
 
 export const DEFAULT_CONFIG: AppConfig = {

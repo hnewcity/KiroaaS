@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { SettingsForm } from './components/SettingsForm';
+import type { SettingsHintKey } from './components/SettingsForm';
 import { AdvancedSettings } from './components/AdvancedSettings';
 import { LogViewer } from './components/LogViewer';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
@@ -11,6 +12,7 @@ import { useI18n } from './hooks/useI18n';
 import { useServerStatus } from './hooks/useServerStatus';
 import { useConversations } from './hooks/useConversations';
 import { startServer, stopServer, getServerLogs } from './lib/tauri';
+import { checkVersionUpdate } from './lib/versionCheck';
 
 // UI Components
 import { Button } from '@/components/ui/button';
@@ -53,6 +55,7 @@ export default function App() {
   const [tempConfig, setTempConfig] = useState(config);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [typewriterText, setTypewriterText] = useState('');
+  const [settingsHint, setSettingsHint] = useState<SettingsHintKey>(null);
   const lastLogLineRef = useRef('');
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -77,6 +80,38 @@ export default function App() {
   useEffect(() => {
     setTempConfig(config);
   }, [config]);
+
+  // Auto version check: on app start + every 6 hours
+  useEffect(() => {
+    if (isConfigLoading) return;
+
+    // 1. App start
+    checkVersionUpdate(config, 'app_start').catch(() => {});
+
+    // 3. Scheduled every 6 hours
+    const SIX_HOURS = 6 * 60 * 60 * 1000;
+    const interval = setInterval(() => {
+      checkVersionUpdate(config, 'scheduled').catch(() => {});
+    }, SIX_HOURS);
+
+    // 2. App close (beforeunload)
+    const handleBeforeUnload = () => {
+      const body = JSON.stringify({
+        currentVersion: '',
+        platform: '',
+        arch: '',
+        clientId: config.client_id || '',
+        trigger: 'app_close',
+      });
+      navigator.sendBeacon?.('https://api.kiroaas.hnew.city/version', body);
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [isConfigLoading]);
 
   // Logs Polling
   useEffect(() => {
@@ -260,54 +295,54 @@ export default function App() {
           {/* Decorative background element */}
           <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-gradient-to-bl from-stone-200/50 to-transparent rounded-full -translate-y-1/2 translate-x-1/2 pointer-events-none" />
 
-          {/* Top Header */}
-          <header data-tauri-drag-region className="px-8 lg:px-10 py-5 flex items-start justify-between flex-shrink-0 z-10 min-h-[70px]">
-            <div className="pt-2">
-              <div className="flex items-center gap-3 mb-1">
-                <h1 className="text-2xl font-bold text-[#111] tracking-tight">
-                  {currentView === 'dashboard' && t('dashboard')}
-                  {currentView === 'settings' && t('tabSettings')}
-                  {currentView === 'logs' && t('systemLogs')}
-                  {currentView === 'chat' && t('tabChat')}
-                </h1>
-                {configError && (
-                  <Badge variant="destructive" className="rounded-full px-3 py-1">{t('configurationError')}</Badge>
+          {/* Top Header - hidden in chat view for immersive experience */}
+          {currentView !== 'chat' && (
+            <header data-tauri-drag-region className="px-8 lg:px-10 py-5 flex items-start justify-between flex-shrink-0 z-10 min-h-[70px]">
+              <div className="pt-2">
+                <div className="flex items-center gap-3 mb-1">
+                  <h1 className="text-2xl font-bold text-[#111] tracking-tight">
+                    {currentView === 'dashboard' && t('dashboard')}
+                    {currentView === 'settings' && t('tabSettings')}
+                    {currentView === 'logs' && t('systemLogs')}
+                  </h1>
+                  {configError && (
+                    <Badge variant="destructive" className="rounded-full px-3 py-1">{t('configurationError')}</Badge>
+                  )}
+                </div>
+                <p className="text-stone-500 font-medium">
+                  {currentView === 'dashboard' && t('dashboardDesc')}
+                  {currentView === 'settings' && t('settingsDesc')}
+                  {currentView === 'logs' && t('logsDesc')}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-4">
+                {/* Main Action Button */}
+                {currentView === 'dashboard' && (
+                  <Button
+                    className={`h-12 rounded-full px-6 font-semibold shadow-lg transition-all duration-300 ${isRunning
+                      ? 'bg-black text-white hover:bg-stone-800'
+                      : 'bg-black text-white hover:bg-stone-800'
+                      }`}
+                    onClick={isRunning ? handleStop : handleStart}
+                    disabled={isProcessing || (!isRunning && !config.proxy_api_key)}
+                  >
+                    {isStarting || isStopping ? (
+                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                    ) : isRunning ? (
+                      <Square className="mr-2 h-5 w-5 fill-current" />
+                    ) : (
+                      <Play className="mr-2 h-5 w-5 fill-current" />
+                    )}
+                    {isRunning ? (isStopping ? t('stopping') : t('stopServer')) : (isStarting ? t('starting') : t('startServer'))}
+                  </Button>
                 )}
               </div>
-              <p className="text-stone-500 font-medium">
-                {currentView === 'dashboard' && t('dashboardDesc')}
-                {currentView === 'settings' && t('settingsDesc')}
-                {currentView === 'logs' && t('logsDesc')}
-                {currentView === 'chat' && t('chatDesc')}
-              </p>
-            </div>
-
-            <div className="flex items-center gap-4">
-              {/* Main Action Button */}
-              {currentView === 'dashboard' && (
-                <Button
-                  className={`h-12 rounded-full px-6 font-semibold shadow-lg transition-all duration-300 ${isRunning
-                    ? 'bg-black text-white hover:bg-stone-800'
-                    : 'bg-black text-white hover:bg-stone-800'
-                    }`}
-                  onClick={isRunning ? handleStop : handleStart}
-                  disabled={isProcessing || (!isRunning && !config.proxy_api_key)}
-                >
-                  {isStarting || isStopping ? (
-                    <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                  ) : isRunning ? (
-                    <Square className="mr-2 h-5 w-5 fill-current" />
-                  ) : (
-                    <Play className="mr-2 h-5 w-5 fill-current" />
-                  )}
-                  {isRunning ? (isStopping ? t('stopping') : t('stopServer')) : (isStarting ? t('starting') : t('startServer'))}
-                </Button>
-              )}
-            </div>
-          </header>
+            </header>
+          )}
 
           {/* Scrollable Content */}
-          <div className="flex-1 overflow-y-auto overflow-x-hidden p-8 lg:px-10 pt-0 z-0 scroll-smooth">
+          <div className={`flex-1 overflow-y-auto overflow-x-hidden z-0 scroll-smooth ${currentView === 'chat' ? 'p-0' : 'p-8 lg:px-10 pt-0'}`}>
 
             {currentView === 'dashboard' && (
               <div className="flex flex-col h-full gap-4 pb-4">
@@ -404,37 +439,37 @@ export default function App() {
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 max-w-7xl pb-10">
                 <div className="lg:col-span-8 space-y-6 order-2 lg:order-1">
                   <div className="bg-white rounded-[32px] p-8 shadow-sm">
-                    <SettingsForm config={tempConfig} onSave={handleSaveConfig} isRunning={isRunning} onRestart={handleRestartServer} />
+                    <SettingsForm config={tempConfig} onSave={handleSaveConfig} isRunning={isRunning} onRestart={handleRestartServer} onHintChange={setSettingsHint} />
                   </div>
                 </div>
                 <div className="lg:col-span-4 space-y-6 order-1 lg:order-2 sticky top-0 lg:static z-10">
                   {/* Advanced Settings - temporarily hidden for testing */}
                   {false && (
-                  <div className="bg-white rounded-[32px] p-6 shadow-sm">
-                    <button
-                      type="button"
-                      onClick={() => setAdvancedOpen(!advancedOpen)}
-                      className="w-full text-lg font-bold mb-4 flex items-center justify-between gap-2 hover:text-stone-600 transition-colors"
-                    >
-                      <div className="flex items-center gap-2">
-                        <Box className="h-5 w-5 text-stone-400" />
-                        {t('advanced')}
-                      </div>
-                      <ChevronDown className={`h-5 w-5 text-stone-400 transition-transform duration-200 ${advancedOpen ? 'rotate-180' : ''}`} />
-                    </button>
-                    {advancedOpen && (
-                      <div className="bg-[#FAFAFA] rounded-2xl p-1 mb-2">
-                        <AdvancedSettings config={tempConfig} onChange={setTempConfig} />
-                      </div>
-                    )}
-                  </div>
+                    <div className="bg-white rounded-[32px] p-6 shadow-sm">
+                      <button
+                        type="button"
+                        onClick={() => setAdvancedOpen(!advancedOpen)}
+                        className="w-full text-lg font-bold mb-4 flex items-center justify-between gap-2 hover:text-stone-600 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Box className="h-5 w-5 text-stone-400" />
+                          {t('advanced')}
+                        </div>
+                        <ChevronDown className={`h-5 w-5 text-stone-400 transition-transform duration-200 ${advancedOpen ? 'rotate-180' : ''}`} />
+                      </button>
+                      {advancedOpen && (
+                        <div className="bg-[#FAFAFA] rounded-2xl p-1 mb-2">
+                          <AdvancedSettings config={tempConfig} onChange={setTempConfig} />
+                        </div>
+                      )}
+                    </div>
                   )}
 
-                  <div className="bg-[#EBFD93] rounded-[32px] p-8 relative overflow-hidden">
+                  <div className="bg-[#EBFD93] rounded-[32px] p-8 relative overflow-hidden transition-all duration-300">
                     <Fingerprint className="h-32 w-32 absolute -right-6 -bottom-6 text-lime-400/50 rotate-12" />
                     <h3 className="text-lg font-bold text-lime-950 mb-2 relative z-10">{t('proTip')}</h3>
-                    <p className="text-sm text-lime-900 font-medium relative z-10">
-                      {t('proTipDesc')}
+                    <p className="text-sm text-lime-900 font-medium relative z-10 transition-opacity duration-200">
+                      {settingsHint ? t((`tooltip_${settingsHint}`) as any) : t('proTipDesc')}
                     </p>
                   </div>
                 </div>
@@ -452,7 +487,7 @@ export default function App() {
             )}
 
             {currentView === 'chat' && (
-              <div className="h-full pb-4">
+              <div className="h-full">
                 <ChatView
                   host={config.server_host}
                   port={config.server_port}

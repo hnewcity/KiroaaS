@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   loadConversations,
   createConversation as createConversationApi,
@@ -18,6 +18,18 @@ export function useConversations() {
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const creatingConversationRef = useRef<Promise<Conversation> | null>(null);
+  const currentConversationIdRef = useRef<string | null>(null);
+  const conversationsRef = useRef<Conversation[]>([]);
+
+  // Keep refs in sync
+  useEffect(() => {
+    currentConversationIdRef.current = currentConversationId;
+  }, [currentConversationId]);
+
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
 
   // Load conversations on mount
   useEffect(() => {
@@ -75,10 +87,24 @@ export function useConversations() {
   }, []);
 
   // Update messages in current conversation
+  // Uses refs to avoid stale closures during streaming
   const updateMessages = useCallback(async (newMessages: Message[], model?: string) => {
-    if (!currentConversationId) {
-      // Create a new conversation if none exists
-      const conv = await createConversation(model);
+    const activeId = currentConversationIdRef.current;
+
+    if (!activeId) {
+      // Prevent multiple concurrent conversation creations during streaming
+      let conv: Conversation;
+      if (creatingConversationRef.current) {
+        conv = await creatingConversationRef.current;
+      } else {
+        const promise = createConversation(model);
+        creatingConversationRef.current = promise;
+        try {
+          conv = await promise;
+        } finally {
+          creatingConversationRef.current = null;
+        }
+      }
       if (newMessages.length === 0) return;
 
       const now = Date.now();
@@ -112,7 +138,7 @@ export function useConversations() {
       return;
     }
 
-    const conversation = conversations.find(c => c.id === currentConversationId);
+    const conversation = conversationsRef.current.find(c => c.id === activeId);
     if (!conversation) return;
 
     const now = Date.now();
@@ -147,14 +173,14 @@ export function useConversations() {
     try {
       await updateConversationApi(updatedConversation);
       setConversations(prev => prev.map(c =>
-        c.id === currentConversationId ? updatedConversation : c
+        c.id === activeId ? updatedConversation : c
       ));
       setError(null);
     } catch (err) {
       console.error('Failed to update conversation:', err);
       setError(err instanceof Error ? err.message : 'Failed to update conversation');
     }
-  }, [currentConversationId, conversations, createConversation]);
+  }, [createConversation]);
 
   // Delete a conversation
   const deleteConversation = useCallback(async (id: string) => {
@@ -196,10 +222,10 @@ export function useConversations() {
     setCurrentConversationId(id);
   }, []);
 
-  // Start a new chat (create new conversation and select it)
-  const startNewChat = useCallback(async (model?: string) => {
-    await createConversation(model);
-  }, [createConversation]);
+  // Start a new chat (just clear selection, conversation created on first message)
+  const startNewChat = useCallback(() => {
+    setCurrentConversationId(null);
+  }, []);
 
   return {
     conversations,

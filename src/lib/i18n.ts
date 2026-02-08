@@ -216,6 +216,15 @@ export const translations = {
     restartServer: '重启服务',
     skipRestart: '稍后',
 
+    // Tooltips
+    tooltip_auth_cli_db: '使用 Kiro CLI 本地 SQLite 数据库中的凭证进行认证',
+    tooltip_auth_creds_file: '使用 AWS SSO 缓存中的 JSON 凭证文件进行认证',
+    tooltip_auth_refresh_token: '直接使用刷新令牌进行认证（手动输入）',
+    tooltip_proxy_api_key: '客户端访问网关时需要携带的密钥，用于保护 API 端点安全',
+    tooltip_generate: '随机生成一个安全的 sk- 前缀 API 密钥',
+    tooltip_check_update: '连接服务器检查是否有新版本可用',
+    tooltip_save: '保存当前所有设置到本地配置文件',
+
     // About & Updates
     about: '关于',
     checkForUpdates: '检查更新',
@@ -437,6 +446,15 @@ export const translations = {
     configSavedRestartPrompt: 'Configuration saved. Restart the server with new settings?',
     restartServer: 'Restart',
     skipRestart: 'Later',
+
+    // Tooltips
+    tooltip_auth_cli_db: 'Authenticate using credentials from the Kiro CLI local SQLite database',
+    tooltip_auth_creds_file: 'Authenticate using a JSON credentials file from the AWS SSO cache',
+    tooltip_auth_refresh_token: 'Authenticate directly with a refresh token (manual input)',
+    tooltip_proxy_api_key: 'A secret key clients must include when accessing the gateway to protect the API endpoint',
+    tooltip_generate: 'Randomly generate a secure API key with sk- prefix',
+    tooltip_check_update: 'Connect to the server to check if a new version is available',
+    tooltip_save: 'Save all current settings to the local configuration file',
 
     // About & Updates
     about: 'About',
@@ -664,6 +682,15 @@ export const translations = {
     restartServer: 'Перезапустить',
     skipRestart: 'Позже',
 
+    // Tooltips
+    tooltip_auth_cli_db: 'Аутентификация с использованием учётных данных из локальной базы данных SQLite Kiro CLI',
+    tooltip_auth_creds_file: 'Аутентификация с использованием JSON-файла учётных данных из кэша AWS SSO',
+    tooltip_auth_refresh_token: 'Аутентификация напрямую с помощью токена обновления (ручной ввод)',
+    tooltip_proxy_api_key: 'Секретный ключ, который клиенты должны передавать при доступе к шлюзу для защиты API',
+    tooltip_generate: 'Случайно сгенерировать безопасный API-ключ с префиксом sk-',
+    tooltip_check_update: 'Подключиться к серверу для проверки наличия новой версии',
+    tooltip_save: 'Сохранить все текущие настройки в локальный файл конфигурации',
+
     // About & Updates
     about: 'О программе',
     checkForUpdates: 'Проверить обновления',
@@ -889,6 +916,15 @@ export const translations = {
     configSavedRestartPrompt: 'Configuración guardada. ¿Reiniciar el servidor con la nueva configuración?',
     restartServer: 'Reiniciar',
     skipRestart: 'Más tarde',
+
+    // Tooltips
+    tooltip_auth_cli_db: 'Autenticarse usando credenciales de la base de datos SQLite local de Kiro CLI',
+    tooltip_auth_creds_file: 'Autenticarse usando un archivo JSON de credenciales del caché de AWS SSO',
+    tooltip_auth_refresh_token: 'Autenticarse directamente con un token de actualización (entrada manual)',
+    tooltip_proxy_api_key: 'Una clave secreta que los clientes deben incluir al acceder al gateway para proteger el endpoint',
+    tooltip_generate: 'Generar aleatoriamente una clave API segura con prefijo sk-',
+    tooltip_check_update: 'Conectar al servidor para verificar si hay una nueva versión disponible',
+    tooltip_save: 'Guardar toda la configuración actual en el archivo de configuración local',
 
     // About & Updates
     about: 'Acerca de',
@@ -1116,6 +1152,15 @@ export const translations = {
     restartServer: 'Mulai Ulang',
     skipRestart: 'Nanti',
 
+    // Tooltips
+    tooltip_auth_cli_db: 'Autentikasi menggunakan kredensial dari database SQLite lokal Kiro CLI',
+    tooltip_auth_creds_file: 'Autentikasi menggunakan file kredensial JSON dari cache AWS SSO',
+    tooltip_auth_refresh_token: 'Autentikasi langsung dengan refresh token (input manual)',
+    tooltip_proxy_api_key: 'Kunci rahasia yang harus disertakan klien saat mengakses gateway untuk melindungi endpoint API',
+    tooltip_generate: 'Buat kunci API aman secara acak dengan awalan sk-',
+    tooltip_check_update: 'Hubungkan ke server untuk memeriksa apakah versi baru tersedia',
+    tooltip_save: 'Simpan semua pengaturan saat ini ke file konfigurasi lokal',
+
     // About & Updates
     about: 'Tentang',
     checkForUpdates: 'Periksa Pembaruan',
@@ -1341,6 +1386,15 @@ export const translations = {
     configSavedRestartPrompt: 'Configuração salva. Reiniciar o servidor com as novas configurações?',
     restartServer: 'Reiniciar',
     skipRestart: 'Depois',
+
+    // Tooltips
+    tooltip_auth_cli_db: 'Autenticar usando credenciais do banco de dados SQLite local do Kiro CLI',
+    tooltip_auth_creds_file: 'Autenticar usando um arquivo JSON de credenciais do cache do AWS SSO',
+    tooltip_auth_refresh_token: 'Autenticar diretamente com um token de atualização (entrada manual)',
+    tooltip_proxy_api_key: 'Uma chave secreta que os clientes devem incluir ao acessar o gateway para proteger o endpoint da API',
+    tooltip_generate: 'Gerar aleatoriamente uma chave de API segura com prefixo sk-',
+    tooltip_check_update: 'Conectar ao servidor para verificar se há uma nova versão disponível',
+    tooltip_save: 'Salvar todas as configurações atuais no arquivo de configuração local',
 
     // About & Updates
     about: 'Sobre',
@@ -1568,6 +1622,15 @@ export const translations = {
     restartServer: '再起動',
     skipRestart: '後で',
 
+    // Tooltips
+    tooltip_auth_cli_db: 'Kiro CLI のローカル SQLite データベースの資格情報を使用して認証します',
+    tooltip_auth_creds_file: 'AWS SSO キャッシュの JSON 資格情報ファイルを使用して認証します',
+    tooltip_auth_refresh_token: 'リフレッシュトークンを直接使用して認証します（手動入力）',
+    tooltip_proxy_api_key: 'API エンドポイントを保護するため、クライアントがゲートウェイにアクセスする際に必要な秘密キー',
+    tooltip_generate: 'sk- プレフィックス付きの安全な API キーをランダムに生成します',
+    tooltip_check_update: 'サーバーに接続して新しいバージョンがあるか確認します',
+    tooltip_save: '現在のすべての設定をローカル設定ファイルに保存します',
+
     // About & Updates
     about: 'アプリについて',
     checkForUpdates: 'アップデートを確認',
@@ -1793,6 +1856,15 @@ export const translations = {
     configSavedRestartPrompt: '설정이 저장되었습니다. 새 설정으로 서버를 재시작하시겠습니까?',
     restartServer: '재시작',
     skipRestart: '나중에',
+
+    // Tooltips
+    tooltip_auth_cli_db: 'Kiro CLI 로컬 SQLite 데이터베이스의 자격 증명을 사용하여 인증합니다',
+    tooltip_auth_creds_file: 'AWS SSO 캐시의 JSON 자격 증명 파일을 사용하여 인증합니다',
+    tooltip_auth_refresh_token: '리프레시 토큰을 직접 사용하여 인증합니다 (수동 입력)',
+    tooltip_proxy_api_key: 'API 엔드포인트를 보호하기 위해 클라이언트가 게이트웨이에 접근할 때 포함해야 하는 비밀 키',
+    tooltip_generate: 'sk- 접두사가 붙은 안전한 API 키를 무작위로 생성합니다',
+    tooltip_check_update: '서버에 연결하여 새 버전이 있는지 확인합니다',
+    tooltip_save: '현재 모든 설정을 로컬 구성 파일에 저장합니다',
 
     // About & Updates
     about: '정보',

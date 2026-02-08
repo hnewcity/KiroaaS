@@ -35,6 +35,9 @@
       "path": {
         "all": true
       },
+      "os": {
+        "all": true
+      },
       "dialog": {
         "all": false,
         "open": true,

@@ -37,6 +37,10 @@ pub struct AppConfig {
     pub truncation_recovery: bool,
     pub log_level: String,
     pub debug_mode: String,
+
+    // Client identity
+    #[serde(default)]
+    pub client_id: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -58,6 +62,7 @@ impl Default for AppConfig {
             truncation_recovery: true,
             log_level: "INFO".to_string(),
             debug_mode: "off".to_string(),
+            client_id: None,
         }
     }
 }
