@@ -1,7 +1,7 @@
 import { platform, arch } from '@tauri-apps/api/os';
 import { VERSION_CHECK_API } from './config';
 import type { AppConfig } from './config';
-import { getAppVersion, saveConfig } from './tauri';
+import { getAppVersion } from './tauri';
 
 export type UpdateTrigger = 'manual' | 'app_start' | 'app_close' | 'scheduled';
 
@@ -18,11 +18,7 @@ export async function checkVersionUpdate(
   trigger: UpdateTrigger,
 ): Promise<UpdateInfo | null> {
   try {
-    let clientId = config.client_id;
-    if (!clientId) {
-      clientId = crypto.randomUUID();
-      await saveConfig({ ...config, client_id: clientId });
-    }
+    const clientId = config.client_id || '';
 
     const [appVersion, currentPlatform, currentArch] = await Promise.all([
       getAppVersion(),

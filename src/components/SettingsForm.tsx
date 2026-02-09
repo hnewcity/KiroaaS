@@ -42,23 +42,17 @@ export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChang
         getAppVersion().then(setAppVersion).catch(console.error);
     }, []);
 
-    // Auto-scan on mount
+    // Sync formData when config prop changes (e.g. after useConfig auto-initialization)
+    useEffect(() => {
+        setFormData(config);
+    }, [config]);
+
+    // Auto-scan on mount (for displaying detected path chips)
     useEffect(() => {
         const autoScan = async () => {
             try {
                 const result = await scanAllCredentials();
                 setScanResult(result);
-                if (result.recommended_method && !config.refresh_token && !config.kiro_creds_file && !config.kiro_cli_db_file) {
-                    // Auto-apply logic
-                    setFormData(prev => ({
-                        ...prev,
-                        auth_method: result.recommended_method as any,
-                        ...(result.recommended_method === 'cli_db'
-                            ? { kiro_cli_db_file: result.recommended_path || '' }
-                            : { kiro_creds_file: result.recommended_path || '' }
-                        )
-                    }));
-                }
             } catch (err) {
                 console.error('Auto-scan failed:', err);
             }
