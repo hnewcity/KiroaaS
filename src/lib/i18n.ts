@@ -210,6 +210,7 @@ export const translations = {
     firstToken: '首个令牌',
     streamRead: '流式读取',
     serverPort: '服务器端口',
+    serverPortDesc: '服务器监听的端口号，修改后需重启生效',
 
     // Config restart
     configSavedRestartPrompt: '配置已保存。是否要用新配置重启服务？',
@@ -441,6 +442,7 @@ export const translations = {
     firstToken: 'First Token',
     streamRead: 'Stream Read',
     serverPort: 'Server Port',
+    serverPortDesc: 'The port the server listens on. Restart required after change.',
 
     // Config restart
     configSavedRestartPrompt: 'Configuration saved. Restart the server with new settings?',
@@ -676,6 +678,7 @@ export const translations = {
     firstToken: 'Первый токен',
     streamRead: 'Чтение стрима',
     serverPort: 'Порт сервера',
+    serverPortDesc: 'Порт, на котором слушает сервер. После изменения требуется перезапуск.',
 
     // Config restart
     configSavedRestartPrompt: 'Конфигурация сохранена. Перезапустить сервер с новыми настройками?',
@@ -911,6 +914,7 @@ export const translations = {
     firstToken: 'Primer token',
     streamRead: 'Lectura de stream',
     serverPort: 'Puerto del servidor',
+    serverPortDesc: 'El puerto en el que escucha el servidor. Se requiere reinicio después del cambio.',
 
     // Config restart
     configSavedRestartPrompt: 'Configuración guardada. ¿Reiniciar el servidor con la nueva configuración?',
@@ -1146,6 +1150,7 @@ export const translations = {
     firstToken: 'Token pertama',
     streamRead: 'Baca stream',
     serverPort: 'Port server',
+    serverPortDesc: 'Port yang didengarkan server. Perlu restart setelah perubahan.',
 
     // Config restart
     configSavedRestartPrompt: 'Konfigurasi disimpan. Mulai ulang server dengan pengaturan baru?',
@@ -1381,6 +1386,7 @@ export const translations = {
     firstToken: 'Primeiro token',
     streamRead: 'Leitura do stream',
     serverPort: 'Porta do servidor',
+    serverPortDesc: 'A porta em que o servidor escuta. Reinício necessário após alteração.',
 
     // Config restart
     configSavedRestartPrompt: 'Configuração salva. Reiniciar o servidor com as novas configurações?',
@@ -1616,6 +1622,7 @@ export const translations = {
     firstToken: '最初のトークン',
     streamRead: 'ストリーム読み取り',
     serverPort: 'サーバーポート',
+    serverPortDesc: 'サーバーが待ち受けるポート番号。変更後は再起動が必要です。',
 
     // Config restart
     configSavedRestartPrompt: '設定を保存しました。新しい設定でサーバーを再起動しますか？',
@@ -1851,6 +1858,7 @@ export const translations = {
     firstToken: '첫 토큰',
     streamRead: '스트림 읽기',
     serverPort: '서버 포트',
+    serverPortDesc: '서버가 수신하는 포트 번호입니다. 변경 후 재시작이 필요합니다.',
 
     // Config restart
     configSavedRestartPrompt: '설정이 저장되었습니다. 새 설정으로 서버를 재시작하시겠습니까?',

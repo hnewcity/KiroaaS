@@ -6,7 +6,7 @@ import { checkVersionUpdate, type UpdateInfo } from '@/lib/versionCheck';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText } from 'lucide-react';
+import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText, Network } from 'lucide-react';
 import { Loader2 } from 'lucide-react';
 
 export type SettingsHintKey = 'auth_cli_db' | 'auth_creds_file' | 'auth_refresh_token' | 'proxy_api_key' | 'generate' | 'check_update' | 'save' | null;
@@ -312,6 +312,34 @@ export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChang
                         <p className="text-xs text-stone-500 pl-1">
                             {t('clientsIncludeKey')}
                         </p>
+                    </div>
+                </div>
+            </div>
+
+            {/* 2.5 Server Settings Section */}
+            <div className="space-y-6 pt-4">
+                <div className="flex items-center gap-3 pb-2 border-b border-stone-100">
+                    <div className="h-10 w-10 rounded-full bg-stone-100 flex items-center justify-center">
+                        <Network className="h-5 w-5 text-stone-600" />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-[#111]">{t('serverSettings')}</h3>
+                        <p className="text-sm text-stone-500">{t('serverPortDesc')}</p>
+                    </div>
+                </div>
+
+                <div className="bg-[#F8F8F8] p-6 rounded-[24px] space-y-6">
+                    <div className="space-y-3">
+                        <Label className="text-sm font-semibold text-[#111] pl-1">{t('serverPort')}</Label>
+                        <Input
+                            type="number"
+                            min={1}
+                            max={65535}
+                            value={formData.server_port || 8000}
+                            onChange={(e) => updateField('server_port', parseInt(e.target.value, 10) || 8000)}
+                            className="h-12 rounded-xl bg-white border-stone-200 focus:ring-black focus:border-black font-mono text-sm"
+                            placeholder="8000"
+                        />
                     </div>
                 </div>
             </div>
