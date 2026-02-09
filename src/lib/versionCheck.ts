@@ -1,7 +1,7 @@
-import { platform, arch } from '@tauri-apps/api/os';
+import { platform, arch, version } from '@tauri-apps/api/os';
 import { VERSION_CHECK_API } from './config';
 import type { AppConfig } from './config';
-import { getAppVersion } from './tauri';
+import { getAppVersion, getDeviceModel } from './tauri';
 
 export type UpdateTrigger = 'manual' | 'app_start' | 'app_close' | 'scheduled';
 
@@ -20,16 +20,20 @@ export async function checkVersionUpdate(
   try {
     const clientId = config.client_id || '';
 
-    const [appVersion, currentPlatform, currentArch] = await Promise.all([
+    const [appVersion, currentPlatform, currentArch, osVersion, deviceModel] = await Promise.all([
       getAppVersion(),
       platform(),
       arch(),
+      version(),
+      getDeviceModel(),
     ]);
 
     const requestBody = {
       currentVersion: appVersion,
       platform: currentPlatform,
       arch: currentArch,
+      osVersion,
+      deviceModel,
       clientId,
       trigger,
     };

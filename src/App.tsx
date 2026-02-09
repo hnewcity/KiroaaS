@@ -100,6 +100,8 @@ export default function App() {
         currentVersion: '',
         platform: '',
         arch: '',
+        osVersion: '',
+        deviceModel: '',
         clientId: config.client_id || '',
         trigger: 'app_close',
       });

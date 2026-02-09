@@ -68,6 +68,45 @@ fn get_app_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
 }
 
+/// Get the device model name
+#[tauri::command]
+fn get_device_model() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        if let Ok(output) = Command::new("sysctl").arg("-n").arg("hw.model").output() {
+            if output.status.success() {
+                return String::from_utf8_lossy(&output.stdout).trim().to_string();
+            }
+        }
+        "Unknown Mac".to_string()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(model) = std::fs::read_to_string("/sys/devices/virtual/dmi/id/product_name") {
+            return model.trim().to_string();
+        }
+        "Unknown Linux Device".to_string()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        if let Ok(output) = Command::new("wmic")
+            .args(["computersystem", "get", "model"])
+            .output()
+        {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                let model = text.lines().nth(1).unwrap_or("").trim();
+                if !model.is_empty() {
+                    return model.to_string();
+                }
+            }
+        }
+        "Unknown Windows Device".to_string()
+    }
+}
+
 /// Install pending update and restart
 #[tauri::command]
 async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
@@ -300,6 +339,7 @@ fn main() {
             check_for_updates,
             install_update,
             get_app_version,
+            get_device_model,
             load_conversations_cmd,
             save_conversations_cmd,
             create_conversation,

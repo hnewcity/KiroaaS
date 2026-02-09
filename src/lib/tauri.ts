@@ -66,6 +66,10 @@ export async function getAppVersion(): Promise<string> {
   return await invoke('get_app_version');
 }
 
+export async function getDeviceModel(): Promise<string> {
+  return await invoke('get_device_model');
+}
+
 // Conversation management
 import type { Conversation, ConversationsData } from './conversations';
 
