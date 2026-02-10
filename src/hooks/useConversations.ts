@@ -127,11 +127,13 @@ export function useConversations() {
         model,
       };
 
+      // Optimistically update UI state first, then persist in background
+      setConversations(prev => prev.map(c =>
+        c.id === conv.id ? updatedConversation : c
+      ));
+
       try {
         await updateConversationApi(updatedConversation);
-        setConversations(prev => prev.map(c =>
-          c.id === conv.id ? updatedConversation : c
-        ));
       } catch (err) {
         console.error('Failed to update conversation:', err);
       }
@@ -170,12 +172,14 @@ export function useConversations() {
       model: model || conversation.model,
     };
 
+    // Optimistically update UI state first, then persist in background
+    setConversations(prev => prev.map(c =>
+      c.id === activeId ? updatedConversation : c
+    ));
+    setError(null);
+
     try {
       await updateConversationApi(updatedConversation);
-      setConversations(prev => prev.map(c =>
-        c.id === activeId ? updatedConversation : c
-      ));
-      setError(null);
     } catch (err) {
       console.error('Failed to update conversation:', err);
       setError(err instanceof Error ? err.message : 'Failed to update conversation');

@@ -41,10 +41,13 @@ cd python-backend/build
 python3 build.py
 cd ../..
 
-# Copy to Tauri resources
-echo "Copying Python executable to resources..."
+# Copy to Tauri resources (compressed to avoid Tauri bundling issues with .so files)
+echo "Packaging Python backend..."
+rm -rf src-tauri/resources/kiro-gateway
 mkdir -p src-tauri/resources
-cp python-backend/build/dist/kiro-gateway src-tauri/resources/
+cd python-backend/build/dist
+tar czf ../../../src-tauri/resources/kiro-gateway.tar.gz kiro-gateway
+cd ../../..
 
 # Build Tauri app
 echo "Building macOS app..."

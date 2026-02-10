@@ -1,5 +1,6 @@
 use crate::config::AppConfig;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::io::{BufRead, BufReader};
 use std::sync::{Arc, Mutex};
@@ -289,17 +290,15 @@ impl ServerManager {
 
         #[cfg(not(debug_assertions))]
         {
-            // Production: use bundled executable
             let exe_name = if cfg!(windows) {
                 "kiro-gateway.exe"
             } else {
                 "kiro-gateway"
             };
 
-            // On macOS, resources are in Contents/Resources/resources/
-            // On other platforms, resources are next to the executable
+            // Determine where the tar.gz is bundled
             #[cfg(target_os = "macos")]
-            let resource_dir = std::env::current_exe()
+            let tar_gz_path = std::env::current_exe()
                 .map_err(|e| format!("Failed to get current exe path: {}", e))?
                 .parent() // MacOS/
                 .ok_or("Failed to get parent directory")?
@@ -307,21 +306,75 @@ impl ServerManager {
                 .ok_or("Failed to get Contents directory")?
                 .join("Resources")
                 .join("resources")
-                .join(exe_name);
+                .join("kiro-gateway.tar.gz");
 
             #[cfg(not(target_os = "macos"))]
-            let resource_dir = std::env::current_exe()
+            let tar_gz_path = std::env::current_exe()
                 .map_err(|e| format!("Failed to get current exe path: {}", e))?
                 .parent()
                 .ok_or("Failed to get parent directory")?
                 .join("resources")
-                .join(exe_name);
+                .join("kiro-gateway.tar.gz");
 
-            if !resource_dir.exists() {
-                return Err(format!("Python executable not found at: {:?}", resource_dir));
+            // Extract to app data directory
+            let extract_dir = dirs::data_local_dir()
+                .ok_or("Failed to get local data directory")?
+                .join("com.kiroaas.app")
+                .join("backend");
+
+            let exe_path = extract_dir.join("kiro-gateway").join(exe_name);
+
+            // Extract if executable doesn't exist yet or tar.gz is newer
+            let needs_extract = if exe_path.exists() {
+                // Re-extract if the tar.gz is newer than the executable
+                let tar_modified = std::fs::metadata(&tar_gz_path)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                let exe_modified = std::fs::metadata(&exe_path)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                tar_modified > exe_modified
+            } else {
+                true
+            };
+
+            if needs_extract {
+                if !tar_gz_path.exists() {
+                    return Err(format!("Bundled archive not found at: {:?}", tar_gz_path));
+                }
+
+                // Clean and recreate extract directory
+                if extract_dir.exists() {
+                    std::fs::remove_dir_all(&extract_dir)
+                        .map_err(|e| format!("Failed to clean extract dir: {}", e))?;
+                }
+                std::fs::create_dir_all(&extract_dir)
+                    .map_err(|e| format!("Failed to create extract dir: {}", e))?;
+
+                // Extract using tar command
+                let status = Command::new("tar")
+                    .args(["xzf", &tar_gz_path.to_string_lossy(), "-C", &extract_dir.to_string_lossy()])
+                    .status()
+                    .map_err(|e| format!("Failed to run tar: {}", e))?;
+
+                if !status.success() {
+                    return Err("Failed to extract kiro-gateway archive".to_string());
+                }
+
+                // Set executable permission on Unix
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&exe_path, std::fs::Permissions::from_mode(0o755))
+                        .map_err(|e| format!("Failed to set executable permission: {}", e))?;
+                }
             }
 
-            Ok(resource_dir.to_string_lossy().to_string())
+            if !exe_path.exists() {
+                return Err(format!("Python executable not found at: {:?}", exe_path));
+            }
+
+            Ok(exe_path.to_string_lossy().to_string())
         }
     }
 }

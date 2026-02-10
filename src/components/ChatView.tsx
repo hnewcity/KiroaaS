@@ -83,13 +83,26 @@ export function ChatView({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composingRef = useRef(false);
+  const compositionEndTimeRef = useRef(0);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  const handleScroll = () => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    // Consider "near bottom" if within 150px of the bottom
+    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
+  };
+
   useEffect(() => {
-    scrollToBottom();
+    if (isNearBottomRef.current) {
+      scrollToBottom();
+    }
   }, [messages]);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -226,7 +239,7 @@ export function ChatView({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !composingRef.current && Date.now() - compositionEndTimeRef.current > 100) {
       e.preventDefault();
       handleSubmit(e);
     }
@@ -318,7 +331,7 @@ export function ChatView({
         )}
 
         {/* Messages Area */}
-        <div className={`flex-1 px-4 ${messages.length > 0 ? 'overflow-y-auto' : 'flex items-center justify-center'}`}>
+        <div ref={scrollContainerRef} onScroll={handleScroll} className={`flex-1 px-4 ${messages.length > 0 ? 'overflow-y-auto' : 'flex items-center justify-center'}`}>
           {!isRunning ? (
             <div className="flex flex-col items-center justify-center h-full">
               <div className="text-center max-w-lg mx-auto">
@@ -422,13 +435,13 @@ export function ChatView({
                               return <p className="my-2">{children}</p>;
                             },
                             ul({ children }) {
-                              return <ul className="my-2 ml-4 list-disc space-y-1">{children}</ul>;
+                              return <ul className="my-2 ml-6 list-disc space-y-1">{children}</ul>;
                             },
                             ol({ children }) {
-                              return <ol className="my-2 ml-4 list-decimal space-y-1">{children}</ol>;
+                              return <ol className="my-2 ml-6 list-decimal space-y-1">{children}</ol>;
                             },
                             li({ children }) {
-                              return <li className="pl-1">{children}</li>;
+                              return <li className="pl-1 [&>ul]:mt-1 [&>ol]:mt-1">{children}</li>;
                             },
                             h1({ children }) {
                               return <h1 className="text-xl font-bold mt-4 mb-2">{children}</h1>;
@@ -521,6 +534,8 @@ export function ChatView({
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
+                  onCompositionStart={() => { composingRef.current = true; }}
+                  onCompositionEnd={() => { composingRef.current = false; compositionEndTimeRef.current = Date.now(); }}
                   placeholder={isRunning ? t('chatPlaceholder') : t('chatServerOffline')}
                   disabled={!isRunning || isLoading}
                   rows={1}

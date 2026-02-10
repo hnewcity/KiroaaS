@@ -57,7 +57,7 @@ pub async fn load_conversations() -> Result<ConversationsData, String> {
     Ok(data)
 }
 
-/// Save conversations to disk
+/// Save conversations to disk (atomic write)
 pub async fn save_conversations(data: &ConversationsData) -> Result<(), String> {
     let path = get_conversations_path()?;
 
@@ -71,9 +71,15 @@ pub async fn save_conversations(data: &ConversationsData) -> Result<(), String> 
     let content = serde_json::to_string_pretty(data)
         .map_err(|e| format!("Failed to serialize conversations: {}", e))?;
 
-    fs::write(&path, content)
+    // Atomic write: write to temp file first, then rename
+    let tmp_path = path.with_extension("json.tmp");
+    fs::write(&tmp_path, &content)
         .await
-        .map_err(|e| format!("Failed to write conversations file: {}", e))?;
+        .map_err(|e| format!("Failed to write conversations temp file: {}", e))?;
+
+    fs::rename(&tmp_path, &path)
+        .await
+        .map_err(|e| format!("Failed to rename conversations temp file: {}", e))?;
 
     Ok(())
 }

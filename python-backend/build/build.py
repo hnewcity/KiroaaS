@@ -64,14 +64,17 @@ def build():
         print("✓ Build completed successfully!")
         print(f"{'='*60}\n")
 
-        # Show output location
-        dist_dir = build_dir / "dist"
+        # Show output location (onedir mode: dist/kiro-gateway/ directory)
+        dist_dir = build_dir / "dist" / "kiro-gateway"
         exe_name = "kiro-gateway.exe" if platform.system() == "Windows" else "kiro-gateway"
         exe_path = dist_dir / exe_name
 
         if exe_path.exists():
+            # Calculate total directory size
+            total_size = sum(f.stat().st_size for f in dist_dir.rglob('*') if f.is_file())
+            print(f"Output directory: {dist_dir}")
             print(f"Executable: {exe_path}")
-            print(f"Size: {exe_path.stat().st_size / (1024*1024):.1f} MB")
+            print(f"Total size: {total_size / (1024*1024):.1f} MB")
         else:
             print(f"Warning: Expected executable not found at {exe_path}")
 

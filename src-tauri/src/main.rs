@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 /// Global server manager state
 struct AppState {
     server_manager: Mutex<ServerManager>,
+    conversations_lock: Mutex<()>,
 }
 
 /// Start the Python server with the given configuration
@@ -276,13 +277,15 @@ async fn load_conversations_cmd() -> Result<ConversationsData, String> {
 
 /// Save conversations to disk
 #[tauri::command]
-async fn save_conversations_cmd(data: ConversationsData) -> Result<(), String> {
+async fn save_conversations_cmd(data: ConversationsData, state: State<'_, AppState>) -> Result<(), String> {
+    let _lock = state.conversations_lock.lock().await;
     save_conversations(&data).await
 }
 
 /// Create a new conversation
 #[tauri::command]
-async fn create_conversation(conversation: Conversation) -> Result<(), String> {
+async fn create_conversation(conversation: Conversation, state: State<'_, AppState>) -> Result<(), String> {
+    let _lock = state.conversations_lock.lock().await;
     let mut data = load_conversations().await?;
     data.conversations.insert(0, conversation);
     save_conversations(&data).await
@@ -290,7 +293,8 @@ async fn create_conversation(conversation: Conversation) -> Result<(), String> {
 
 /// Update an existing conversation
 #[tauri::command]
-async fn update_conversation(conversation: Conversation) -> Result<(), String> {
+async fn update_conversation(conversation: Conversation, state: State<'_, AppState>) -> Result<(), String> {
+    let _lock = state.conversations_lock.lock().await;
     let mut data = load_conversations().await?;
     if let Some(pos) = data.conversations.iter().position(|c| c.id == conversation.id) {
         data.conversations[pos] = conversation;
@@ -302,7 +306,8 @@ async fn update_conversation(conversation: Conversation) -> Result<(), String> {
 
 /// Delete a conversation
 #[tauri::command]
-async fn delete_conversation(id: String) -> Result<(), String> {
+async fn delete_conversation(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let _lock = state.conversations_lock.lock().await;
     let mut data = load_conversations().await?;
     data.conversations.retain(|c| c.id != id);
     save_conversations(&data).await
@@ -310,7 +315,8 @@ async fn delete_conversation(id: String) -> Result<(), String> {
 
 /// Rename a conversation
 #[tauri::command]
-async fn rename_conversation(id: String, title: String) -> Result<(), String> {
+async fn rename_conversation(id: String, title: String, state: State<'_, AppState>) -> Result<(), String> {
+    let _lock = state.conversations_lock.lock().await;
     let mut data = load_conversations().await?;
     if let Some(conv) = data.conversations.iter_mut().find(|c| c.id == id) {
         conv.title = title;
@@ -324,6 +330,7 @@ fn main() {
     tauri::Builder::default()
         .manage(AppState {
             server_manager: Mutex::new(ServerManager::new()),
+            conversations_lock: Mutex::new(()),
         })
         .invoke_handler(tauri::generate_handler![
             start_server,

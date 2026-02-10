@@ -47,7 +47,7 @@
     "bundle": {
       "active": true,
       "resources": [
-        "resources/kiro-gateway"
+        "resources/kiro-gateway.tar.gz"
       ],
       "category": "DeveloperTool",
       "copyright": "Copyright (C) 2026 KiroaaS",
@@ -84,7 +84,7 @@
     "updater": {
       "active": true,
       "endpoints": [
-        "https://github.com/hnewcity/KiroaaS/releases/latest/download/latest.json"
+        "https://kiroaas.hnew.city/releases/latest.json"
       ],
       "dialog": true,
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ1QzMwMTNENUJDRTRBNUEKUldSYVNzNWJQUUhEMVlhK3B2cEl1elFYMmhNRldhcHNITm9WaUVOVFlmN3pxZE03SWlRNUJlUjAK"
