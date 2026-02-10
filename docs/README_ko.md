@@ -40,7 +40,7 @@ KiroaaS(Kiro as a Service)는 로컬 OpenAI 호환 및 Anthropic 호환 API를 �
 | 🔄 **재시도 로직** | 오류 시 자동 재시도 (403, 429, 5xx) |
 | 🔐 **스마트 토큰 관리** | 만료 전 자동 갱신 |
 | 🌍 **다국어 UI** | English, 中文, 日本語, 한국어, Русский, Español, Português, Indonesia |
-| 🔗 **CC Switch 연동** | [CC Switch](https://github.com/yiGmMk/cc-switch)로 원클릭 가져오기 (Claude Code용) |
+| 🔗 **CC Switch 연동** | [CC Switch](https://github.com/farion1231/cc-switch)로 원클릭 가져오기 (Claude Code용) |
 | 🔄 **자동 업데이트** | 내장 업데이트 체커로 최신 버전 유지 |
 
 ## 📦 설치

@@ -40,7 +40,7 @@ KiroaaS（Kiro as a Service）は、ローカルの OpenAI 互換・Anthropic �
 | 🔄 **リトライロジック** | エラー時の自動リトライ (403, 429, 5xx) |
 | 🔐 **スマートトークン管理** | 有効期限前に自動更新 |
 | 🌍 **多言語 UI** | English, 中文, 日本語, 한국어, Русский, Español, Português, Indonesia |
-| 🔗 **CC Switch 連携** | [CC Switch](https://github.com/yiGmMk/cc-switch) へワンクリックインポート（Claude Code 用） |
+| 🔗 **CC Switch 連携** | [CC Switch](https://github.com/farion1231/cc-switch) へワンクリックインポート（Claude Code 用） |
 | 🔄 **自動アップデート** | 内蔵アップデートチェッカーで最新版を維持 |
 
 ## 📦 インストール

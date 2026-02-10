@@ -138,7 +138,7 @@ class KiroAuthManager:
         """
         self._refresh_token = refresh_token
         self._profile_arn = profile_arn
-        self._region = region
+        self._region = region or "us-east-1"
         self._creds_file = creds_file
         self._sqlite_db = sqlite_db
         
@@ -341,7 +341,7 @@ class KiroAuthManager:
                 self._access_token = data['accessToken']
             if 'profileArn' in data:
                 self._profile_arn = data['profileArn']
-            if 'region' in data:
+            if 'region' in data and data['region']:
                 self._region = data['region']
                 # Update URLs for new region
                 self._refresh_url = get_kiro_refresh_url(self._region)

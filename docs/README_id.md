@@ -40,7 +40,7 @@ KiroaaS (Kiro as a Service) adalah gateway desktop yang mengekspos model AI Kiro
 | 🔄 **Logika Retry** | Retry otomatis saat error (403, 429, 5xx) |
 | 🔐 **Manajemen token cerdas** | Refresh otomatis sebelum kedaluwarsa |
 | 🌍 **UI multibahasa** | English, 中文, 日本語, 한국어, Русский, Español, Português, Indonesia |
-| 🔗 **Integrasi CC Switch** | Impor satu klik ke [CC Switch](https://github.com/yiGmMk/cc-switch) untuk Claude Code |
+| 🔗 **Integrasi CC Switch** | Impor satu klik ke [CC Switch](https://github.com/farion1231/cc-switch) untuk Claude Code |
 | 🔄 **Pembaruan otomatis** | Pemeriksa pembaruan bawaan |
 
 ## 📦 Instalasi

@@ -40,7 +40,7 @@ KiroaaS（Kiro 即服务）是一个桌面网关应用，通过本地 OpenAI 兼
 | 🔄 **重试逻辑** | 自动重试错误 (403, 429, 5xx) |
 | 🔐 **智能令牌管理** | 过期前自动刷新 |
 | 🌍 **多语言界面** | English, 中文, 日本語, 한국어, Русский, Español, Português, Indonesia |
-| 🔗 **CC Switch 集成** | 一键导入到 [CC Switch](https://github.com/yiGmMk/cc-switch)，用于 Claude Code |
+| 🔗 **CC Switch 集成** | 一键导入到 [CC Switch](https://github.com/farion1231/cc-switch)，用于 Claude Code |
 | 🔄 **自动更新** | 内置更新检查器，保持最新版本 |
 
 ## 📦 安装

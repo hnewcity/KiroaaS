@@ -40,7 +40,7 @@ KiroaaS (Kiro as a Service) es una pasarela de escritorio que expone los modelos
 | 🔄 **Lógica de reintentos** | Reintentos automáticos en errores (403, 429, 5xx) |
 | 🔐 **Gestión inteligente de tokens** | Actualización automática antes de expirar |
 | 🌍 **Interfaz multilingüe** | English, 中文, 日本語, 한국어, Русский, Español, Português, Indonesia |
-| 🔗 **Integración con CC Switch** | Importación con un clic a [CC Switch](https://github.com/yiGmMk/cc-switch) para Claude Code |
+| 🔗 **Integración con CC Switch** | Importación con un clic a [CC Switch](https://github.com/farion1231/cc-switch) para Claude Code |
 | 🔄 **Actualización automática** | Verificador de actualizaciones integrado |
 
 ## 📦 Instalación
