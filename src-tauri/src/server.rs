@@ -1,6 +1,5 @@
 use crate::config::AppConfig;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::io::{BufRead, BufReader};
 use std::sync::{Arc, Mutex};

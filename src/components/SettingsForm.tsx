@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useI18n } from '@/hooks/useI18n';
 import type { AppConfig, AuthMethod } from '@/lib/config';
-import { scanAllCredentials, type CredentialScanResult, installUpdate, getAppVersion } from '@/lib/tauri';
+import { scanAllCredentials, type CredentialScanResult, /* installUpdate, */ getAppVersion } from '@/lib/tauri';
 import { checkVersionUpdate, type UpdateInfo } from '@/lib/versionCheck';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -33,7 +33,7 @@ export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChang
     // Update check state
     const [appVersion, setAppVersion] = useState('');
     const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
-    const [isInstalling, setIsInstalling] = useState(false);
+    // const [isInstalling, setIsInstalling] = useState(false); // TODO: 恢复 Tauri 原生更新时启用
     const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
     const [updateError, setUpdateError] = useState<string | null>(null);
 
@@ -390,18 +390,10 @@ export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChang
                                 <Button
                                     type="button"
                                     onClick={handleInstallUpdate}
-                                    disabled={isInstalling}
                                     size="sm"
                                     className="rounded-xl bg-black text-white hover:bg-stone-800 text-xs"
                                 >
-                                    {isInstalling ? (
-                                        <>
-                                            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                                            {t('installing')}
-                                        </>
-                                    ) : (
-                                        t('downloadUpdate')
-                                    )}
+                                    {t('downloadUpdate')}
                                 </Button>
                             )}
                             <Button
