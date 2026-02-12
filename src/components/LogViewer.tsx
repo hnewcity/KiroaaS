@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, memo } from 'react';
 import { useI18n } from '@/hooks/useI18n';
 import { clearServerLogs } from '@/lib/tauri';
 import { save } from '@tauri-apps/api/dialog';
@@ -8,11 +8,40 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Download, Trash2, ScrollText, Terminal, PlayCircle } from 'lucide-react';
 
+const MAX_VISIBLE_LOGS = 500;
+
 // Strip ANSI escape codes from log text
 function stripAnsi(text: string): string {
     // eslint-disable-next-line no-control-regex
     return text.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
 }
+
+// Extract timestamp from log line (e.g., "2026-02-10 18:11:11 | ...")
+const TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s*\|/;
+function extractTimestamp(log: string): string {
+    const m = log.match(TIMESTAMP_RE);
+    if (m) {
+        // Return HH:MM:SS portion
+        return m[1].split(/\s+/)[1];
+    }
+    return '';
+}
+
+interface ProcessedLog {
+    text: string;
+    time: string;
+}
+
+const LogLine = memo(({ log, index }: { log: ProcessedLog; index: number }) => (
+    <div key={index} className="flex gap-3 hover:bg-[#2a2a2a] -mx-2 px-2 py-0.5 rounded transition-colors group/line">
+        <span className="text-stone-600 text-xs select-none w-[80px] flex-shrink-0 text-right font-mono opacity-50">
+            {log.time}
+        </span>
+        <span className="break-all whitespace-pre-wrap flex-1 text-stone-300 group-hover/line:text-white transition-colors">
+            {log.text}
+        </span>
+    </div>
+));
 
 interface LogViewerProps {
     logs?: string[];
@@ -24,6 +53,18 @@ export function LogViewer({ logs = [], onLogsCleared }: LogViewerProps) {
     const [autoScroll, setAutoScroll] = useState(true);
     const viewportRef = useRef<HTMLDivElement>(null);
 
+    // Pre-process logs: strip ANSI, extract timestamps, limit to last N entries
+    const processedLogs = useMemo<ProcessedLog[]>(() => {
+        const sliced = logs.length > MAX_VISIBLE_LOGS ? logs.slice(-MAX_VISIBLE_LOGS) : logs;
+        return sliced.map(log => {
+            const cleaned = stripAnsi(log);
+            return {
+                text: cleaned,
+                time: extractTimestamp(cleaned),
+            };
+        });
+    }, [logs]);
+
     // Auto-scroll logic
     useEffect(() => {
         if (autoScroll && viewportRef.current) {
@@ -32,7 +73,7 @@ export function LogViewer({ logs = [], onLogsCleared }: LogViewerProps) {
                 behavior: 'smooth'
             });
         }
-    }, [logs, autoScroll]);
+    }, [processedLogs, autoScroll]);
 
     const handleClear = async () => {
         try {
@@ -119,7 +160,7 @@ export function LogViewer({ logs = [], onLogsCleared }: LogViewerProps) {
                 ref={viewportRef}
                 className="flex-1 overflow-auto px-6 pt-6 pb-0 space-y-1 custom-scrollbar scroll-smooth relative"
             >
-                {logs.length === 0 ? (
+                {processedLogs.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-stone-600 space-y-4">
                         <div className="bg-[#252526] p-4 rounded-full">
                             <ScrollText className="h-8 w-8 opacity-50" />
@@ -127,15 +168,8 @@ export function LogViewer({ logs = [], onLogsCleared }: LogViewerProps) {
                         <p>{t('noLogsAvailable')}</p>
                     </div>
                 ) : (
-                    logs.map((log, i) => (
-                        <div key={i} className="flex gap-3 hover:bg-[#2a2a2a] -mx-2 px-2 py-0.5 rounded transition-colors group/line">
-                            <span className="text-stone-600 text-xs select-none w-[80px] flex-shrink-0 text-right font-mono opacity-50">
-                                {new Date().toLocaleTimeString().split(' ')[0]}
-                            </span>
-                            <span className="break-all whitespace-pre-wrap flex-1 text-stone-300 group-hover/line:text-white transition-colors">
-                                {stripAnsi(log)}
-                            </span>
-                        </div>
+                    processedLogs.map((log, i) => (
+                        <LogLine key={i} log={log} index={i} />
                     ))
                 )}
             </div>
