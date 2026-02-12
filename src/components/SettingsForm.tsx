@@ -134,14 +134,18 @@ export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChang
     };
 
     const handleInstallUpdate = async () => {
-        setIsInstalling(true);
-        try {
-            await installUpdate();
-        } catch (err) {
-            setUpdateError(t('updateCheckFailed'));
-        } finally {
-            setIsInstalling(false);
-        }
+        // TODO: 恢复 Tauri 原生更新逻辑
+        // setIsInstalling(true);
+        // try {
+        //     await installUpdate();
+        // } catch (err) {
+        //     setUpdateError(t('updateCheckFailed'));
+        // } finally {
+        //     setIsInstalling(false);
+        // }
+
+        // 临时：跳转官网下载
+        window.open('https://kiroaas.hnew.city', '_blank');
     };
 
     const hintEnter = (key: SettingsHintKey) => () => onHintChange?.(key);
