@@ -1,6 +1,6 @@
 {
   "version": "1.0.2",
-  "notes": "- Add server port configuration in settings\n- Auto-scan local credentials on startup with recommended auth method\n- Auto-initialize default config on first launch\n- Report OS version and device model during update checks",
+  "notes": "- Add server port configuration in settings\n- Auto-scan local credentials on startup with recommended auth method\n- Auto-initialize default config on first launch\n- Report OS version and device model during update checks\n- Optimize LogViewer performance with memoization and render limiting\n- Fix default region to us-east-1 in KiroAuthManager\n- Update download button to redirect to official website",
   "pub_date": "2026-02-10T00:00:00Z",
   "platforms": {
     "darwin-x86_64": {

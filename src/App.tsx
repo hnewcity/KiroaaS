@@ -11,8 +11,9 @@ import { useConfig } from './hooks/useConfig';
 import { useI18n } from './hooks/useI18n';
 import { useServerStatus } from './hooks/useServerStatus';
 import { useConversations } from './hooks/useConversations';
-import { startServer, stopServer, getServerLogs } from './lib/tauri';
+import { startServer, stopServer, getServerLogs, getAppVersion, getDeviceModel } from './lib/tauri';
 import { checkVersionUpdate } from './lib/versionCheck';
+import { platform, arch, version } from '@tauri-apps/api/os';
 
 // UI Components
 import { Button } from '@/components/ui/button';
@@ -85,6 +86,14 @@ export default function App() {
   useEffect(() => {
     if (isConfigLoading) return;
 
+    // Cache device info for beforeunload
+    let cachedInfo = { currentVersion: '', platform: '', arch: '', osVersion: '', deviceModel: '' };
+    Promise.all([getAppVersion(), platform(), arch(), version(), getDeviceModel()])
+      .then(([v, p, a, o, d]) => {
+        cachedInfo = { currentVersion: v, platform: p, arch: a, osVersion: o, deviceModel: d };
+      })
+      .catch(() => {});
+
     // 1. App start
     checkVersionUpdate(config, 'app_start').catch(() => {});
 
@@ -97,11 +106,7 @@ export default function App() {
     // 2. App close (beforeunload)
     const handleBeforeUnload = () => {
       const body = JSON.stringify({
-        currentVersion: '',
-        platform: '',
-        arch: '',
-        osVersion: '',
-        deviceModel: '',
+        ...cachedInfo,
         clientId: config.client_id || '',
         trigger: 'app_close',
       });
