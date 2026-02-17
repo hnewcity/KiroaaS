@@ -8,6 +8,12 @@ use std::thread;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 /// Server status information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerStatus {
@@ -125,6 +131,12 @@ impl ServerManager {
             });
         }
 
+        // On Windows, prevent a console window from flashing
+        #[cfg(windows)]
+        {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
         // Clear old logs
         self.logs.lock().unwrap().clear();
 
@@ -209,7 +221,12 @@ impl ServerManager {
 
             #[cfg(windows)]
             {
-                let _ = child.kill();
+                // Kill the entire process tree using taskkill
+                let pid = child.id();
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output();
             }
 
             // Wait for process to exit (with timeout)
@@ -226,8 +243,13 @@ impl ServerManager {
                             unsafe {
                                 libc::kill(-pid, libc::SIGKILL);
                             }
-                            #[cfg(not(unix))]
-                            let _ = child.kill();
+                            #[cfg(windows)]
+                            {
+                                let _ = Command::new("taskkill")
+                                    .args(["/F", "/T", "/PID", &child.id().to_string()])
+                                    .creation_flags(CREATE_NO_WINDOW)
+                                    .output();
+                            }
                             break;
                         }
                         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -263,10 +285,13 @@ impl ServerManager {
                 // Kill the entire process group
                 libc::kill(-pid, libc::SIGKILL);
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
             {
-                let mut child = child;
-                let _ = child.kill();
+                let pid = child.id();
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output();
             }
         }
         self.status = ServerStatus {
@@ -388,10 +413,13 @@ impl Drop for ServerManager {
                 let pid = child.id() as i32;
                 libc::kill(-pid, libc::SIGKILL);
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
             {
-                let mut child = child;
-                let _ = child.kill();
+                let pid = child.id();
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output();
             }
         }
     }

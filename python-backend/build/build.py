@@ -22,10 +22,10 @@ def check_pyinstaller():
     """Check if PyInstaller is installed."""
     try:
         import PyInstaller
-        print(f"✓ PyInstaller {PyInstaller.__version__} found")
+        print(f"[OK] PyInstaller {PyInstaller.__version__} found")
         return True
     except ImportError:
-        print("✗ PyInstaller not found")
+        print("[ERROR] PyInstaller not found")
         print("\nPlease install PyInstaller:")
         print("  pip install pyinstaller")
         return False
@@ -41,7 +41,7 @@ def build():
     spec_file = build_dir / "main.spec"
 
     if not spec_file.exists():
-        print(f"✗ Spec file not found: {spec_file}")
+        print(f"[ERROR] Spec file not found: {spec_file}")
         sys.exit(1)
 
     print(f"\n{'='*60}")
@@ -61,7 +61,7 @@ def build():
         ])
 
         print(f"\n{'='*60}")
-        print("✓ Build completed successfully!")
+        print("[OK] Build completed successfully!")
         print(f"{'='*60}\n")
 
         # Show output location (onedir mode: dist/kiro-gateway/ directory)
@@ -79,7 +79,7 @@ def build():
             print(f"Warning: Expected executable not found at {exe_path}")
 
     except Exception as e:
-        print(f"\n✗ Build failed: {e}")
+        print(f"\n[ERROR] Build failed: {e}")
         sys.exit(1)
 
 
