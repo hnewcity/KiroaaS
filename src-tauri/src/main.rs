@@ -8,7 +8,7 @@ mod server;
 use config::{AppConfig, load_config, save_config};
 use conversations::{Conversation, ConversationsData, load_conversations, save_conversations};
 use server::{ServerManager, ServerStatus};
-use tauri::{Manager, State};
+use tauri::{Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu, CustomMenuItem};
 use tokio::sync::Mutex;
 
 /// Global server manager state
@@ -23,6 +23,23 @@ async fn start_server(
     config: AppConfig,
     state: State<'_, AppState>,
 ) -> Result<ServerStatus, String> {
+    // Validate that credentials are configured for the selected auth method
+    let has_credentials = match &config.auth_method {
+        crate::config::AuthMethod::RefreshToken => {
+            config.refresh_token.as_ref().map_or(false, |t| !t.is_empty())
+        }
+        crate::config::AuthMethod::CredsFile => {
+            config.kiro_creds_file.as_ref().map_or(false, |f| !f.is_empty())
+        }
+        crate::config::AuthMethod::CliDb => {
+            config.kiro_cli_db_file.as_ref().map_or(false, |d| !d.is_empty())
+        }
+    };
+
+    if !has_credentials {
+        return Err("No credentials configured. Please set up authentication in Settings first.".to_string());
+    }
+
     let mut manager = state.server_manager.lock().await;
     manager.start(config).await
 }
@@ -92,8 +109,10 @@ fn get_device_model() -> String {
     #[cfg(target_os = "windows")]
     {
         use std::process::Command;
+        use std::os::windows::process::CommandExt;
         if let Ok(output) = Command::new("wmic")
             .args(["computersystem", "get", "model"])
+            .creation_flags(0x08000000)
             .output()
         {
             if output.status.success() {
@@ -327,7 +346,49 @@ async fn rename_conversation(id: String, title: String, state: State<'_, AppStat
 }
 
 fn main() {
+    let show = CustomMenuItem::new("show".to_string(), "显示窗口");
+    let hide = CustomMenuItem::new("hide".to_string(), "隐藏窗口");
+    let quit = CustomMenuItem::new("quit".to_string(), "退出");
+    let tray_menu = SystemTrayMenu::new()
+        .add_item(show)
+        .add_item(hide)
+        .add_native_item(tauri::SystemTrayMenuItem::Separator)
+        .add_item(quit);
+    let system_tray = SystemTray::new().with_menu(tray_menu);
+
     tauri::Builder::default()
+        .system_tray(system_tray)
+        .on_system_tray_event(|app, event| match event {
+            SystemTrayEvent::DoubleClick { .. } => {
+                let window = app.get_window("main").unwrap();
+                if window.is_visible().unwrap_or(false) {
+                    let _ = window.hide();
+                } else {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
+                "show" => {
+                    let window = app.get_window("main").unwrap();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+                "hide" => {
+                    let window = app.get_window("main").unwrap();
+                    let _ = window.hide();
+                }
+                "quit" => {
+                    let state: State<AppState> = app.state();
+                    if let Ok(mut manager) = state.server_manager.try_lock() {
+                        ServerManager::kill_process(&mut manager);
+                    }
+                    app.exit(0);
+                }
+                _ => {}
+            },
+            _ => {}
+        })
         .manage(AppState {
             server_manager: Mutex::new(ServerManager::new()),
             conversations_lock: Mutex::new(()),
@@ -355,16 +416,10 @@ fn main() {
             rename_conversation,
         ])
         .on_window_event(|event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event.event() {
-                // Stop the server when window is closing
-                let app_handle = event.window().app_handle();
-                let state: State<AppState> = app_handle.state();
-
-                // Use blocking to stop the server synchronously
-                if let Ok(mut manager) = state.server_manager.try_lock() {
-                    // Manually kill the process since we can't use async here
-                    ServerManager::kill_process(&mut manager);
-                };
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event.event() {
+                // Hide the window instead of closing — service keeps running
+                api.prevent_close();
+                let _ = event.window().hide();
             }
         })
         .run(tauri::generate_context!())
