@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://opensource.org/licenses/AGPL-3.0"><img src="https://img.shields.io/badge/License-AGPL%203.0-blue.svg" alt="License: AGPL-3.0"></a>
-  <img src="https://img.shields.io/badge/platform-macOS-brightgreen" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-brightgreen" alt="Platform">
   <a href="http://makeapullrequest.com"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"></a>
 </p>
 
@@ -53,8 +53,9 @@ KiroaaS (Kiro as a Service) — это десктопный шлюз, котор
 |-----------|-------------|---------|
 | macOS | Apple Silicon (M1/M2/M3) | [KiroaaS_aarch64.dmg](https://github.com/hnewcity/KiroaaS/releases) |
 | macOS | Intel | [KiroaaS_x64.dmg](https://github.com/hnewcity/KiroaaS/releases) |
+| Windows | x64 | [KiroaaS_x64-setup.exe](https://github.com/hnewcity/KiroaaS/releases) |
 
-> Поддержка Windows и Linux скоро появится.
+> Поддержка Linux скоро появится.
 
 ### Сборка из исходников
 
