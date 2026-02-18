@@ -6,7 +6,8 @@ import { checkVersionUpdate, type UpdateInfo } from '@/lib/versionCheck';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText, Network } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
+import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText, Network, Wifi } from 'lucide-react';
 import { Loader2 } from 'lucide-react';
 
 export type SettingsHintKey = 'auth_cli_db' | 'auth_creds_file' | 'auth_refresh_token' | 'proxy_api_key' | 'generate' | 'check_update' | 'save' | null;
@@ -332,7 +333,25 @@ export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChang
                     </div>
                 </div>
 
-                <div className="bg-[#F8F8F8] p-6 rounded-[24px] space-y-6">
+                <div className="bg-[#F8F8F8] p-6 rounded-[24px]">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                            <Wifi className="h-5 w-5 text-stone-400" />
+                            <div>
+                                <Label className="text-sm font-semibold text-[#111]">{t('enableLanAccess')}</Label>
+                                <p className="text-xs text-stone-500 mt-0.5">{t('lanAccessDesc')}</p>
+                            </div>
+                        </div>
+                        <Switch
+                            checked={formData.server_host === '0.0.0.0'}
+                            onCheckedChange={(checked) =>
+                                updateField('server_host', checked ? '0.0.0.0' : '127.0.0.1')
+                            }
+                        />
+                    </div>
+                </div>
+
+                <div className="bg-[#F8F8F8] p-6 rounded-[24px]">
                     <div className="space-y-3">
                         <Label className="text-sm font-semibold text-[#111] pl-1">{t('serverPort')}</Label>
                         <Input

@@ -376,9 +376,13 @@ impl ServerManager {
                     .map_err(|e| format!("Failed to create extract dir: {}", e))?;
 
                 // Extract using tar command
-                let status = Command::new("tar")
-                    .args(["xzf", &tar_gz_path.to_string_lossy(), "-C", &extract_dir.to_string_lossy()])
-                    .status()
+                let mut tar_cmd = Command::new("tar");
+                tar_cmd.args(["xzf", &tar_gz_path.to_string_lossy(), "-C", &extract_dir.to_string_lossy()]);
+                #[cfg(windows)]
+                {
+                    tar_cmd.creation_flags(CREATE_NO_WINDOW);
+                }
+                let status = tar_cmd.status()
                     .map_err(|e| format!("Failed to run tar: {}", e))?;
 
                 if !status.success() {

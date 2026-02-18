@@ -209,6 +209,9 @@ export const translations = {
     timeoutsSeconds: '超时（秒）',
     firstToken: '首个令牌',
     streamRead: '流式读取',
+    lanAccess: '局域网访问',
+    enableLanAccess: '允许局域网访问',
+    lanAccessDesc: '开启后其他设备可通过局域网 IP 访问服务器，关闭则仅限本机访问',
     serverPort: '服务器端口',
     serverPortDesc: '服务器监听的端口号，修改后需重启生效',
 
@@ -441,6 +444,9 @@ export const translations = {
     timeoutsSeconds: 'Timeouts (seconds)',
     firstToken: 'First Token',
     streamRead: 'Stream Read',
+    lanAccess: 'LAN Access',
+    enableLanAccess: 'Allow LAN Access',
+    lanAccessDesc: 'When enabled, other devices on the local network can access the server. When disabled, only this machine can access it.',
     serverPort: 'Server Port',
     serverPortDesc: 'The port the server listens on. Restart required after change.',
 
@@ -677,6 +683,9 @@ export const translations = {
     timeoutsSeconds: 'Тайм‑ауты (сек.)',
     firstToken: 'Первый токен',
     streamRead: 'Чтение стрима',
+    lanAccess: 'Доступ по LAN',
+    enableLanAccess: 'Разрешить доступ по LAN',
+    lanAccessDesc: 'При включении другие устройства в локальной сети смогут подключаться к серверу. При выключении доступ только с этого компьютера.',
     serverPort: 'Порт сервера',
     serverPortDesc: 'Порт, на котором слушает сервер. После изменения требуется перезапуск.',
 
@@ -913,6 +922,9 @@ export const translations = {
     timeoutsSeconds: 'Tiempos de espera (segundos)',
     firstToken: 'Primer token',
     streamRead: 'Lectura de stream',
+    lanAccess: 'Acceso LAN',
+    enableLanAccess: 'Permitir acceso LAN',
+    lanAccessDesc: 'Al activar, otros dispositivos en la red local pueden acceder al servidor. Al desactivar, solo esta máquina puede acceder.',
     serverPort: 'Puerto del servidor',
     serverPortDesc: 'El puerto en el que escucha el servidor. Se requiere reinicio después del cambio.',
 
@@ -1149,6 +1161,9 @@ export const translations = {
     timeoutsSeconds: 'Timeout (detik)',
     firstToken: 'Token pertama',
     streamRead: 'Baca stream',
+    lanAccess: 'Akses LAN',
+    enableLanAccess: 'Izinkan Akses LAN',
+    lanAccessDesc: 'Saat diaktifkan, perangkat lain di jaringan lokal dapat mengakses server. Saat dinonaktifkan, hanya mesin ini yang dapat mengakses.',
     serverPort: 'Port server',
     serverPortDesc: 'Port yang didengarkan server. Perlu restart setelah perubahan.',
 
@@ -1385,6 +1400,9 @@ export const translations = {
     timeoutsSeconds: 'Timeouts (segundos)',
     firstToken: 'Primeiro token',
     streamRead: 'Leitura do stream',
+    lanAccess: 'Acesso LAN',
+    enableLanAccess: 'Permitir acesso LAN',
+    lanAccessDesc: 'Quando ativado, outros dispositivos na rede local podem acessar o servidor. Quando desativado, apenas esta máquina pode acessar.',
     serverPort: 'Porta do servidor',
     serverPortDesc: 'A porta em que o servidor escuta. Reinício necessário após alteração.',
 
@@ -1621,6 +1639,9 @@ export const translations = {
     timeoutsSeconds: 'タイムアウト (秒)',
     firstToken: '最初のトークン',
     streamRead: 'ストリーム読み取り',
+    lanAccess: 'LAN アクセス',
+    enableLanAccess: 'LAN アクセスを許可',
+    lanAccessDesc: '有効にすると、ローカルネットワーク上の他のデバイスからサーバーにアクセスできます。無効の場合はこのマシンのみアクセス可能です。',
     serverPort: 'サーバーポート',
     serverPortDesc: 'サーバーが待ち受けるポート番号。変更後は再起動が必要です。',
 
@@ -1857,6 +1878,9 @@ export const translations = {
     timeoutsSeconds: '타임아웃(초)',
     firstToken: '첫 토큰',
     streamRead: '스트림 읽기',
+    lanAccess: 'LAN 접근',
+    enableLanAccess: 'LAN 접근 허용',
+    lanAccessDesc: '활성화하면 로컬 네트워크의 다른 기기에서 서버에 접근할 수 있습니다. 비활성화하면 이 컴퓨터에서만 접근 가능합니다.',
     serverPort: '서버 포트',
     serverPortDesc: '서버가 수신하는 포트 번호입니다. 변경 후 재시작이 필요합니다.',
 

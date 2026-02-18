@@ -128,9 +128,10 @@ export function ServerControl({ config }: ServerControlProps) {
         </div>
 
         {!canStart && !isRunning && (
-          <p className="text-sm text-muted-foreground">
-            {t('configureApiKeyFirst')}
-          </p>
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>{t('configureApiKeyFirst')}</AlertDescription>
+          </Alert>
         )}
       </CardContent>
     </Card>
