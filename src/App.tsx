@@ -30,7 +30,8 @@ import {
   Fingerprint,
   ShieldCheck,
   ChevronDown,
-  MessageCircle
+  MessageCircle,
+  RotateCw
 } from 'lucide-react';
 
 type View = 'dashboard' | 'settings' | 'logs' | 'chat';
@@ -57,6 +58,8 @@ export default function App() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [typewriterText, setTypewriterText] = useState('');
   const [settingsHint, setSettingsHint] = useState<SettingsHintKey>(null);
+  const [isRestarting, setIsRestarting] = useState(false);
+  const [isMac, setIsMac] = useState(true);
   const lastLogLineRef = useRef('');
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -65,6 +68,11 @@ export default function App() {
   const isStarting = pendingAction === 'start' || status.status === 'starting';
   const isStopping = pendingAction === 'stop';
   const isProcessing = isStarting || isStopping;
+
+  // Detect platform
+  useEffect(() => {
+    platform().then(p => setIsMac(p === 'darwin'));
+  }, []);
 
   // Clear pending action when server status changes to a stable state
   useEffect(() => {
@@ -209,6 +217,7 @@ export default function App() {
   };
 
   const handleRestartServer = async () => {
+    setIsRestarting(true);
     setPendingAction('stop');
     try {
       await stopServer();
@@ -220,6 +229,8 @@ export default function App() {
       console.error(err);
       setPendingAction(null);
       throw err;
+    } finally {
+      setIsRestarting(false);
     }
   };
 
@@ -237,7 +248,7 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen w-full bg-[#111111] font-sans overflow-hidden">
       {/* Title Bar Drag Region */}
-      <div data-tauri-drag-region className="h-8 w-full flex-shrink-0" />
+      <div data-tauri-drag-region className={`${isMac ? 'h-8' : 'h-2'} w-full flex-shrink-0`} />
 
       <div className="flex flex-1 p-2 pt-0 gap-2 overflow-hidden">
 
@@ -326,6 +337,7 @@ export default function App() {
               <div className="flex items-center gap-4">
                 {/* Main Action Button */}
                 {currentView === 'dashboard' && (
+                  <>
                   <Button
                     className={`h-12 rounded-full px-6 font-semibold shadow-lg transition-all duration-300 ${isRunning
                       ? 'bg-black text-white hover:bg-stone-800'
@@ -343,6 +355,22 @@ export default function App() {
                     )}
                     {isRunning ? (isStopping ? t('stopping') : t('stopServer')) : (isStarting ? t('starting') : t('startServer'))}
                   </Button>
+                  {isRunning && (
+                    <Button
+                      variant="outline"
+                      className="h-12 rounded-full px-6 font-semibold border-stone-300 hover:bg-stone-100 transition-all duration-300"
+                      onClick={handleRestartServer}
+                      disabled={isProcessing}
+                    >
+                      {isRestarting ? (
+                        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                      ) : (
+                        <RotateCw className="mr-2 h-5 w-5" />
+                      )}
+                      {isRestarting ? t('starting') : t('restartServer')}
+                    </Button>
+                  )}
+                  </>
                 )}
               </div>
             </header>
