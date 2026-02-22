@@ -8,8 +8,76 @@ mod server;
 use config::{AppConfig, load_config, save_config};
 use conversations::{Conversation, ConversationsData, load_conversations, save_conversations};
 use server::{ServerManager, ServerStatus};
-use tauri::{Manager, RunEvent, State, SystemTray, SystemTrayEvent, SystemTrayMenu, CustomMenuItem};
+use tauri::{Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu, CustomMenuItem};
 use tokio::sync::Mutex;
+
+#[cfg(target_os = "macos")]
+mod macos_dock {
+    use cocoa::appkit::NSApp;
+    use cocoa::base::{id, BOOL, YES, NO};
+    use objc::runtime::{Class, Object, Sel};
+    use objc::{msg_send, sel, sel_impl};
+    use tauri::Manager;
+
+    static APP_HANDLE_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    /// Add reopen handler to the existing Tauri delegate via class method injection.
+    pub fn setup_dock_click_handler(app_handle: tauri::AppHandle) {
+        let handle = Box::new(app_handle);
+        APP_HANDLE_PTR.store(Box::into_raw(handle) as usize, std::sync::atomic::Ordering::SeqCst);
+
+        unsafe {
+            let ns_app = NSApp();
+            let delegate: id = msg_send![ns_app, delegate];
+            let delegate_class: *mut Class = msg_send![delegate, class];
+
+            let sel = sel!(applicationShouldHandleReopen:hasVisibleWindows:);
+            let imp: objc::runtime::Imp = std::mem::transmute(
+                application_should_handle_reopen as extern "C" fn(&Object, Sel, id, BOOL) -> BOOL,
+            );
+
+            let success = objc::runtime::class_addMethod(
+                delegate_class,
+                sel,
+                imp,
+                std::ffi::CStr::from_bytes_with_nul(b"B@:@B\0").unwrap().as_ptr(),
+            );
+
+            if !success {
+                // Method already exists — replace it instead
+                let method = objc::runtime::class_getInstanceMethod(
+                    delegate_class,
+                    sel,
+                );
+                if !method.is_null() {
+                    objc::runtime::method_setImplementation(
+                        method as *mut _,
+                        imp,
+                    );
+                }
+            }
+        }
+    }
+
+    extern "C" fn application_should_handle_reopen(
+        _this: &Object,
+        _cmd: Sel,
+        _sender: id,
+        has_visible_windows: BOOL,
+    ) -> BOOL {
+        if has_visible_windows == NO {
+            let ptr = APP_HANDLE_PTR.load(std::sync::atomic::Ordering::SeqCst);
+            if ptr != 0 {
+                let app_handle = unsafe { &*(ptr as *const tauri::AppHandle) };
+                if let Some(window) = app_handle.get_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+        }
+        YES
+    }
+}
 
 /// Global server manager state
 struct AppState {
@@ -393,6 +461,11 @@ fn main() {
             server_manager: Mutex::new(ServerManager::new()),
             conversations_lock: Mutex::new(()),
         })
+        .setup(|app| {
+            #[cfg(target_os = "macos")]
+            macos_dock::setup_dock_click_handler(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             start_server,
             stop_server,
@@ -422,16 +495,6 @@ fn main() {
                 let _ = event.window().hide();
             }
         })
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app_handle, event| {
-            if let RunEvent::Reopen { has_visible_windows, .. } = event {
-                if !has_visible_windows {
-                    if let Some(window) = app_handle.get_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                }
-            }
-        });
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }
