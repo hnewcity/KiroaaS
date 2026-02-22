@@ -90,7 +90,7 @@
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ1QzMwMTNENUJDRTRBNUEKUldSYVNzNWJQUUhEMVlhK3B2cEl1elFYMmhNRldhcHNITm9WaUVOVFlmN3pxZE03SWlRNUJlUjAK"
     },
     "systemTray": {
-      "iconPath": "icons/icon.png",
+      "iconPath": "icons/tray-icon.png",
       "iconAsTemplate": true
     },
     "windows": [
