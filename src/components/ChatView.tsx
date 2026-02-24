@@ -75,6 +75,8 @@ export function ChatView({
   onDeleteConversation,
   onRenameConversation,
 }: ChatViewProps) {
+  // 0.0.0.0 is for server binding (listen on all interfaces), not a valid client address
+  const fetchHost = host === '0.0.0.0' ? '127.0.0.1' : host;
   const { t } = useI18n();
   const [input, setInput] = useState('');
   const [images, setImages] = useState<string[]>([]);
@@ -161,7 +163,7 @@ export function ChatView({
     setIsLoading(true);
 
     try {
-      const response = await fetch(`http://${host}:${port}/v1/chat/completions`, {
+      const response = await fetch(`http://${fetchHost}:${port}/v1/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -277,7 +279,7 @@ export function ChatView({
   const fetchModels = useCallback(async () => {
     if (!isRunning) return;
     try {
-      const response = await fetch(`http://${host}:${port}/v1/models`, {
+      const response = await fetch(`http://${fetchHost}:${port}/v1/models`, {
         headers: {
           'Authorization': `Bearer ${apiKey}`,
         },
