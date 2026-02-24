@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText, Network, Wifi } from 'lucide-react';
+import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText, Network, Wifi, AlertTriangle } from 'lucide-react';
 import { Loader2 } from 'lucide-react';
 
 export type SettingsHintKey = 'auth_cli_db' | 'auth_creds_file' | 'auth_refresh_token' | 'proxy_api_key' | 'generate' | 'check_update' | 'save' | null;
@@ -458,6 +458,12 @@ export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChang
 
             {/* Action Bar */}
             <div className="rounded-xl pt-6 flex justify-end gap-4">
+                {JSON.stringify(formData) !== JSON.stringify(config) && isRunning && !showRestartPrompt && (
+                    <div className="flex items-center text-amber-700 bg-amber-50 px-4 py-2 rounded-full text-sm font-medium animate-in fade-in">
+                        <AlertTriangle className="w-4 h-4 mr-2" />
+                        {t('configChangeHint')}
+                    </div>
+                )}
                 {error && (
                     <div className="flex items-center text-red-500 bg-red-50 px-4 py-2 rounded-full text-sm font-medium animate-in fade-in">
                         <X className="w-4 h-4 mr-2" />

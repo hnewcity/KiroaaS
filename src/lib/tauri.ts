@@ -96,3 +96,14 @@ export async function deleteConversation(id: string): Promise<void> {
 export async function renameConversation(id: string, title: string): Promise<void> {
   return await invoke('rename_conversation', { id, title });
 }
+
+export async function updateTrayLanguage(labels: {
+  startServerLabel: string;
+  stopServerLabel: string;
+  restartServerLabel: string;
+  showWindowLabel: string;
+  hideWindowLabel: string;
+  quitLabel: string;
+}): Promise<void> {
+  return await invoke('update_tray_language', labels);
+}

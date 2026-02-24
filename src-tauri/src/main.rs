@@ -1,5 +1,6 @@
 // Prevents additional console window on Windows in release builds
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![allow(unexpected_cfgs)]
 
 mod config;
 mod conversations;
@@ -8,7 +9,7 @@ mod server;
 use config::{AppConfig, load_config, save_config};
 use conversations::{Conversation, ConversationsData, load_conversations, save_conversations};
 use server::{ServerManager, ServerStatus};
-use tauri::{Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu, CustomMenuItem};
+use tauri::{Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu, CustomMenuItem, AppHandle};
 use tokio::sync::Mutex;
 
 #[cfg(target_os = "macos")]
@@ -413,11 +414,39 @@ async fn rename_conversation(id: String, title: String, state: State<'_, AppStat
     }
 }
 
+/// Update tray menu labels for i18n
+#[tauri::command]
+async fn update_tray_language(
+    app: AppHandle,
+    start_server_label: String,
+    stop_server_label: String,
+    restart_server_label: String,
+    show_window_label: String,
+    hide_window_label: String,
+    quit_label: String,
+) -> Result<(), String> {
+    let tray = app.tray_handle();
+    tray.get_item("start_server").set_title(&start_server_label).map_err(|e| e.to_string())?;
+    tray.get_item("stop_server").set_title(&stop_server_label).map_err(|e| e.to_string())?;
+    tray.get_item("restart_server").set_title(&restart_server_label).map_err(|e| e.to_string())?;
+    tray.get_item("show").set_title(&show_window_label).map_err(|e| e.to_string())?;
+    tray.get_item("hide").set_title(&hide_window_label).map_err(|e| e.to_string())?;
+    tray.get_item("quit").set_title(&quit_label).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn main() {
+    let start_server_item = CustomMenuItem::new("start_server".to_string(), "启动服务器");
+    let stop_server_item = CustomMenuItem::new("stop_server".to_string(), "停止服务器");
+    let restart_server_item = CustomMenuItem::new("restart_server".to_string(), "重启服务器");
     let show = CustomMenuItem::new("show".to_string(), "显示窗口");
     let hide = CustomMenuItem::new("hide".to_string(), "隐藏窗口");
     let quit = CustomMenuItem::new("quit".to_string(), "退出");
     let tray_menu = SystemTrayMenu::new()
+        .add_item(start_server_item)
+        .add_item(stop_server_item)
+        .add_item(restart_server_item)
+        .add_native_item(tauri::SystemTrayMenuItem::Separator)
         .add_item(show)
         .add_item(hide)
         .add_native_item(tauri::SystemTrayMenuItem::Separator)
@@ -437,6 +466,53 @@ fn main() {
                 }
             }
             SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
+                "start_server" => {
+                    let app_handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let config = match load_config().await {
+                            Ok(c) => c,
+                            Err(e) => {
+                                eprintln!("[Tray] Failed to load config: {}", e);
+                                return;
+                            }
+                        };
+                        let state: State<AppState> = app_handle.state();
+                        let mut manager = state.server_manager.lock().await;
+                        if let Err(e) = manager.start(config).await {
+                            eprintln!("[Tray] Failed to start server: {}", e);
+                        }
+                    });
+                }
+                "stop_server" => {
+                    let app_handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let state: State<AppState> = app_handle.state();
+                        let mut manager = state.server_manager.lock().await;
+                        if let Err(e) = manager.stop().await {
+                            eprintln!("[Tray] Failed to stop server: {}", e);
+                        }
+                    });
+                }
+                "restart_server" => {
+                    let app_handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let config = match load_config().await {
+                            Ok(c) => c,
+                            Err(e) => {
+                                eprintln!("[Tray] Failed to load config: {}", e);
+                                return;
+                            }
+                        };
+                        let state: State<AppState> = app_handle.state();
+                        let mut manager = state.server_manager.lock().await;
+                        if let Err(e) = manager.stop().await {
+                            eprintln!("[Tray] Failed to stop server: {}", e);
+                        }
+                        if let Err(e) = manager.start(config).await {
+                            eprintln!("[Tray] Failed to start server: {}", e);
+                        }
+                    });
+                }
                 "show" => {
                     let window = app.get_window("main").unwrap();
                     let _ = window.show();
@@ -487,6 +563,7 @@ fn main() {
             update_conversation,
             delete_conversation,
             rename_conversation,
+            update_tray_language,
         ])
         .on_window_event(|event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event.event() {

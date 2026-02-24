@@ -217,7 +217,11 @@ export const translations = {
 
     // Config restart
     configSavedRestartPrompt: '配置已保存。是否要用新配置重启服务？',
+    configChangeHint: '修改配置后需保存并重启服务才能生效',
     restartServer: '重启服务',
+    trayShowWindow: '显示窗口',
+    trayHideWindow: '隐藏窗口',
+    trayQuit: '退出',
     skipRestart: '稍后',
 
     // Tooltips
@@ -452,7 +456,11 @@ export const translations = {
 
     // Config restart
     configSavedRestartPrompt: 'Configuration saved. Restart the server with new settings?',
+    configChangeHint: 'Changes require save and server restart to take effect',
     restartServer: 'Restart',
+    trayShowWindow: 'Show Window',
+    trayHideWindow: 'Hide Window',
+    trayQuit: 'Quit',
     skipRestart: 'Later',
 
     // Tooltips
@@ -691,7 +699,11 @@ export const translations = {
 
     // Config restart
     configSavedRestartPrompt: 'Конфигурация сохранена. Перезапустить сервер с новыми настройками?',
+    configChangeHint: 'Изменения вступят в силу после сохранения и перезапуска сервера',
     restartServer: 'Перезапустить',
+    trayShowWindow: 'Показать окно',
+    trayHideWindow: 'Скрыть окно',
+    trayQuit: 'Выход',
     skipRestart: 'Позже',
 
     // Tooltips
@@ -930,7 +942,11 @@ export const translations = {
 
     // Config restart
     configSavedRestartPrompt: 'Configuración guardada. ¿Reiniciar el servidor con la nueva configuración?',
+    configChangeHint: 'Los cambios requieren guardar y reiniciar el servidor para aplicarse',
     restartServer: 'Reiniciar',
+    trayShowWindow: 'Mostrar ventana',
+    trayHideWindow: 'Ocultar ventana',
+    trayQuit: 'Salir',
     skipRestart: 'Más tarde',
 
     // Tooltips
@@ -1169,7 +1185,11 @@ export const translations = {
 
     // Config restart
     configSavedRestartPrompt: 'Konfigurasi disimpan. Mulai ulang server dengan pengaturan baru?',
+    configChangeHint: 'Perubahan memerlukan penyimpanan dan restart server untuk diterapkan',
     restartServer: 'Mulai Ulang',
+    trayShowWindow: 'Tampilkan Jendela',
+    trayHideWindow: 'Sembunyikan Jendela',
+    trayQuit: 'Keluar',
     skipRestart: 'Nanti',
 
     // Tooltips
@@ -1408,7 +1428,11 @@ export const translations = {
 
     // Config restart
     configSavedRestartPrompt: 'Configuração salva. Reiniciar o servidor com as novas configurações?',
+    configChangeHint: 'As alterações requerem salvar e reiniciar o servidor para entrar em vigor',
     restartServer: 'Reiniciar',
+    trayShowWindow: 'Mostrar janela',
+    trayHideWindow: 'Ocultar janela',
+    trayQuit: 'Sair',
     skipRestart: 'Depois',
 
     // Tooltips
@@ -1647,7 +1671,11 @@ export const translations = {
 
     // Config restart
     configSavedRestartPrompt: '設定を保存しました。新しい設定でサーバーを再起動しますか？',
+    configChangeHint: '変更を反映するには保存してサーバーを再起動する必要があります',
     restartServer: '再起動',
+    trayShowWindow: 'ウィンドウを表示',
+    trayHideWindow: 'ウィンドウを非表示',
+    trayQuit: '終了',
     skipRestart: '後で',
 
     // Tooltips
@@ -1886,7 +1914,11 @@ export const translations = {
 
     // Config restart
     configSavedRestartPrompt: '설정이 저장되었습니다. 새 설정으로 서버를 재시작하시겠습니까?',
+    configChangeHint: '변경 사항을 적용하려면 저장 후 서버를 재시작해야 합니다',
     restartServer: '재시작',
+    trayShowWindow: '창 표시',
+    trayHideWindow: '창 숨기기',
+    trayQuit: '종료',
     skipRestart: '나중에',
 
     // Tooltips

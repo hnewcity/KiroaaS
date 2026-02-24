@@ -1,5 +1,6 @@
-import { createContext, useContext, useState, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { getTranslation, Language, TranslationKey } from '@/lib/i18n';
+import { updateTrayLanguage } from '@/lib/tauri';
 
 interface I18nContextType {
   lang: Language;
@@ -55,6 +56,17 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const t = (key: TranslationKey): string => {
     return getTranslation(lang, key);
   };
+
+  useEffect(() => {
+    updateTrayLanguage({
+      startServerLabel: getTranslation(lang, 'startServer'),
+      stopServerLabel: getTranslation(lang, 'stopServer'),
+      restartServerLabel: getTranslation(lang, 'restartServer'),
+      showWindowLabel: getTranslation(lang, 'trayShowWindow'),
+      hideWindowLabel: getTranslation(lang, 'trayHideWindow'),
+      quitLabel: getTranslation(lang, 'trayQuit'),
+    }).catch(() => {});
+  }, [lang]);
 
   return (
     <I18nContext.Provider value={{ lang, setLang, t }}>
