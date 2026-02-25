@@ -1,6 +1,6 @@
 {
   "name": "kiroaas",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "KiroaaS Desktop App - Cross-platform desktop client for Kiro API",
   "type": "module",
   "scripts": {
