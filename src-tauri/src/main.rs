@@ -44,7 +44,7 @@ mod macos_dock {
                 std::ffi::CStr::from_bytes_with_nul(b"B@:@B\0").unwrap().as_ptr(),
             );
 
-            if !success {
+            if success == 0 {
                 // Method already exists — replace it instead
                 let method = objc::runtime::class_getInstanceMethod(
                     delegate_class,
