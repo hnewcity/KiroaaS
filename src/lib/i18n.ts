@@ -212,6 +212,9 @@ export const translations = {
     lanAccess: '局域网访问',
     enableLanAccess: '允许局域网访问',
     lanAccessDesc: '开启后其他设备可通过局域网 IP 访问服务器，关闭则仅限本机访问',
+    thinkingOutput: 'Thinking 输出',
+    showThinkingProcess: '显示 Thinking 过程',
+    showThinkingProcessDesc: '开启后在兼容接口中暴露 thinking/reasoning 输出，关闭后隐藏这部分内容',
     serverPort: '服务器端口',
     serverPortDesc: '服务器监听的端口号，修改后需重启生效',
 
@@ -451,6 +454,9 @@ export const translations = {
     lanAccess: 'LAN Access',
     enableLanAccess: 'Allow LAN Access',
     lanAccessDesc: 'When enabled, other devices on the local network can access the server. When disabled, only this machine can access it.',
+    thinkingOutput: 'Thinking Output',
+    showThinkingProcess: 'Show Thinking Process',
+    showThinkingProcessDesc: 'When enabled, thinking/reasoning output is exposed through the compatible APIs. When disabled, that output is hidden.',
     serverPort: 'Server Port',
     serverPortDesc: 'The port the server listens on. Restart required after change.',
 
@@ -694,6 +700,9 @@ export const translations = {
     lanAccess: 'Доступ по LAN',
     enableLanAccess: 'Разрешить доступ по LAN',
     lanAccessDesc: 'При включении другие устройства в локальной сети смогут подключаться к серверу. При выключении доступ только с этого компьютера.',
+    thinkingOutput: 'Вывод Thinking',
+    showThinkingProcess: 'Показывать процесс Thinking',
+    showThinkingProcessDesc: 'При включении thinking/reasoning вывод будет доступен через совместимые API. При выключении эта часть будет скрыта.',
     serverPort: 'Порт сервера',
     serverPortDesc: 'Порт, на котором слушает сервер. После изменения требуется перезапуск.',
 
@@ -937,6 +946,9 @@ export const translations = {
     lanAccess: 'Acceso LAN',
     enableLanAccess: 'Permitir acceso LAN',
     lanAccessDesc: 'Al activar, otros dispositivos en la red local pueden acceder al servidor. Al desactivar, solo esta máquina puede acceder.',
+    thinkingOutput: 'Salida de Thinking',
+    showThinkingProcess: 'Mostrar proceso Thinking',
+    showThinkingProcessDesc: 'Cuando está activado, la salida de thinking/reasoning se expone a través de las APIs compatibles. Cuando está desactivado, esa salida se oculta.',
     serverPort: 'Puerto del servidor',
     serverPortDesc: 'El puerto en el que escucha el servidor. Se requiere reinicio después del cambio.',
 
@@ -1180,6 +1192,9 @@ export const translations = {
     lanAccess: 'Akses LAN',
     enableLanAccess: 'Izinkan Akses LAN',
     lanAccessDesc: 'Saat diaktifkan, perangkat lain di jaringan lokal dapat mengakses server. Saat dinonaktifkan, hanya mesin ini yang dapat mengakses.',
+    thinkingOutput: 'Output Thinking',
+    showThinkingProcess: 'Tampilkan proses Thinking',
+    showThinkingProcessDesc: 'Saat diaktifkan, output thinking/reasoning diekspos melalui API yang kompatibel. Saat dinonaktifkan, output tersebut disembunyikan.',
     serverPort: 'Port server',
     serverPortDesc: 'Port yang didengarkan server. Perlu restart setelah perubahan.',
 
@@ -1423,6 +1438,9 @@ export const translations = {
     lanAccess: 'Acesso LAN',
     enableLanAccess: 'Permitir acesso LAN',
     lanAccessDesc: 'Quando ativado, outros dispositivos na rede local podem acessar o servidor. Quando desativado, apenas esta máquina pode acessar.',
+    thinkingOutput: 'Saída de Thinking',
+    showThinkingProcess: 'Mostrar processo Thinking',
+    showThinkingProcessDesc: 'Quando ativado, a saída de thinking/reasoning é exposta pelas APIs compatíveis. Quando desativado, essa saída fica oculta.',
     serverPort: 'Porta do servidor',
     serverPortDesc: 'A porta em que o servidor escuta. Reinício necessário após alteração.',
 
@@ -1666,6 +1684,9 @@ export const translations = {
     lanAccess: 'LAN アクセス',
     enableLanAccess: 'LAN アクセスを許可',
     lanAccessDesc: '有効にすると、ローカルネットワーク上の他のデバイスからサーバーにアクセスできます。無効の場合はこのマシンのみアクセス可能です。',
+    thinkingOutput: 'Thinking 出力',
+    showThinkingProcess: 'Thinking プロセスを表示',
+    showThinkingProcessDesc: '有効にすると、thinking/reasoning 出力が互換 API 経由で公開されます。無効にすると、その出力は非表示になります。',
     serverPort: 'サーバーポート',
     serverPortDesc: 'サーバーが待ち受けるポート番号。変更後は再起動が必要です。',
 
@@ -1909,6 +1930,9 @@ export const translations = {
     lanAccess: 'LAN 접근',
     enableLanAccess: 'LAN 접근 허용',
     lanAccessDesc: '활성화하면 로컬 네트워크의 다른 기기에서 서버에 접근할 수 있습니다. 비활성화하면 이 컴퓨터에서만 접근 가능합니다.',
+    thinkingOutput: 'Thinking 출력',
+    showThinkingProcess: 'Thinking 과정 표시',
+    showThinkingProcessDesc: '활성화하면 thinking/reasoning 출력이 호환 API를 통해 노출됩니다. 비활성화하면 해당 출력이 숨겨집니다.',
     serverPort: '서버 포트',
     serverPortDesc: '서버가 수신하는 포트 번호입니다. 변경 후 재시작이 필요합니다.',
 
