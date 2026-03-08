@@ -165,6 +165,7 @@ KiroaaS supports multiple authentication methods:
 
 | Option | Description |
 |--------|-------------|
+| Show Thinking Process | Toggle whether thinking/reasoning output is exposed through the compatible APIs |
 | VPN/Proxy URL | HTTP/SOCKS5 proxy for network restrictions |
 | First Token Timeout | Timeout for initial response (seconds) |
 | Streaming Read Timeout | Timeout for streaming responses (seconds) |

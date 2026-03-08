@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { SettingsForm } from './components/SettingsForm';
 import type { SettingsHintKey } from './components/SettingsForm';
-import { AdvancedSettings } from './components/AdvancedSettings';
 import { LogViewer } from './components/LogViewer';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { ApiExamples } from './components/ApiExamples';
@@ -26,10 +25,8 @@ import {
   Play,
   Square,
   Activity,
-  Box,
   Fingerprint,
   ShieldCheck,
-  ChevronDown,
   MessageCircle,
   RotateCw
 } from 'lucide-react';
@@ -55,7 +52,6 @@ export default function App() {
   const [logs, setLogs] = useState<string[]>([]);
   const [pendingAction, setPendingAction] = useState<'start' | 'stop' | null>(null);
   const [tempConfig, setTempConfig] = useState(config);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [typewriterText, setTypewriterText] = useState('');
   const [settingsHint, setSettingsHint] = useState<SettingsHintKey>(null);
   const [isRestarting, setIsRestarting] = useState(false);
@@ -478,28 +474,6 @@ export default function App() {
                   </div>
                 </div>
                 <div className="lg:col-span-4 space-y-6 order-1 lg:order-2 sticky top-0 lg:static z-10">
-                  {/* Advanced Settings - temporarily hidden for testing */}
-                  {false && (
-                    <div className="bg-white rounded-[32px] p-6 shadow-sm">
-                      <button
-                        type="button"
-                        onClick={() => setAdvancedOpen(!advancedOpen)}
-                        className="w-full text-lg font-bold mb-4 flex items-center justify-between gap-2 hover:text-stone-600 transition-colors"
-                      >
-                        <div className="flex items-center gap-2">
-                          <Box className="h-5 w-5 text-stone-400" />
-                          {t('advanced')}
-                        </div>
-                        <ChevronDown className={`h-5 w-5 text-stone-400 transition-transform duration-200 ${advancedOpen ? 'rotate-180' : ''}`} />
-                      </button>
-                      {advancedOpen && (
-                        <div className="bg-[#FAFAFA] rounded-2xl p-1 mb-2">
-                          <AdvancedSettings config={tempConfig} onChange={setTempConfig} />
-                        </div>
-                      )}
-                    </div>
-                  )}
-
                   <div className="bg-[#EBFD93] rounded-[32px] p-8 relative overflow-hidden transition-all duration-300">
                     <Fingerprint className="h-32 w-32 absolute -right-6 -bottom-6 text-lime-400/50 rotate-12" />
                     <h3 className="text-lg font-bold text-lime-950 mb-2 relative z-10">{t('proTip')}</h3>

@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText, Network, Wifi, AlertTriangle } from 'lucide-react';
+import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText, Network, Wifi, AlertTriangle, Brain, Box } from 'lucide-react';
 import { Loader2 } from 'lucide-react';
 
 export type SettingsHintKey = 'auth_cli_db' | 'auth_creds_file' | 'auth_refresh_token' | 'proxy_api_key' | 'generate' | 'check_update' | 'save' | null;
@@ -272,7 +272,36 @@ export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChang
                 </div>
             </div>
 
-            {/* 2. Proxy Security Section */}
+            {/* 2. Advanced Section */}
+            <div className="space-y-6 pt-4">
+                <div className="flex items-center gap-3 pb-2 border-b border-stone-100">
+                    <div className="h-10 w-10 rounded-full bg-stone-100 flex items-center justify-center">
+                        <Box className="h-5 w-5 text-stone-600" />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-[#111]">{t('advanced')}</h3>
+                        <p className="text-sm text-stone-500">{t('thinkingOutput')}</p>
+                    </div>
+                </div>
+
+                <div className="bg-[#F8F8F8] p-6 rounded-[24px]">
+                    <div className="flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-3">
+                            <Brain className="h-5 w-5 text-stone-400" />
+                            <div>
+                                <Label className="text-sm font-semibold text-[#111]">{t('showThinkingProcess')}</Label>
+                                <p className="text-xs text-stone-500 mt-0.5">{t('showThinkingProcessDesc')}</p>
+                            </div>
+                        </div>
+                        <Switch
+                            checked={formData.fake_reasoning}
+                            onCheckedChange={(checked) => updateField('fake_reasoning', checked)}
+                        />
+                    </div>
+                </div>
+            </div>
+
+            {/* 3. Proxy Security Section */}
             <div className="space-y-6 pt-4">
                 <div className="flex items-center gap-3 pb-2 border-b border-stone-100">
                     <div className="h-10 w-10 rounded-full bg-stone-100 flex items-center justify-center">
@@ -321,7 +350,7 @@ export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChang
                 </div>
             </div>
 
-            {/* 2.5 Server Settings Section */}
+            {/* 3.5 Server Settings Section */}
             <div className="space-y-6 pt-4">
                 <div className="flex items-center gap-3 pb-2 border-b border-stone-100">
                     <div className="h-10 w-10 rounded-full bg-stone-100 flex items-center justify-center">
