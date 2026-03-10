@@ -215,6 +215,8 @@ export const translations = {
     thinkingOutput: 'Thinking 输出',
     showThinkingProcess: '显示 Thinking 过程',
     showThinkingProcessDesc: '开启后在兼容接口中暴露 thinking/reasoning 输出，关闭后隐藏这部分内容',
+    autoLaunch: '开机自启动',
+    autoLaunchDesc: '开启后应用将在系统启动时自动运行',
     serverPort: '服务器端口',
     serverPortDesc: '服务器监听的端口号，修改后需重启生效',
 
@@ -457,6 +459,8 @@ export const translations = {
     thinkingOutput: 'Thinking Output',
     showThinkingProcess: 'Show Thinking Process',
     showThinkingProcessDesc: 'When enabled, thinking/reasoning output is exposed through the compatible APIs. When disabled, that output is hidden.',
+    autoLaunch: 'Launch at Startup',
+    autoLaunchDesc: 'Automatically start the app when your system boots',
     serverPort: 'Server Port',
     serverPortDesc: 'The port the server listens on. Restart required after change.',
 
@@ -703,6 +707,8 @@ export const translations = {
     thinkingOutput: 'Вывод Thinking',
     showThinkingProcess: 'Показывать процесс Thinking',
     showThinkingProcessDesc: 'При включении thinking/reasoning вывод будет доступен через совместимые API. При выключении эта часть будет скрыта.',
+    autoLaunch: 'Автозапуск',
+    autoLaunchDesc: 'При включении приложение будет автоматически запускаться при старте системы',
     serverPort: 'Порт сервера',
     serverPortDesc: 'Порт, на котором слушает сервер. После изменения требуется перезапуск.',
 
@@ -949,6 +955,8 @@ export const translations = {
     thinkingOutput: 'Salida de Thinking',
     showThinkingProcess: 'Mostrar proceso Thinking',
     showThinkingProcessDesc: 'Cuando está activado, la salida de thinking/reasoning se expone a través de las APIs compatibles. Cuando está desactivado, esa salida se oculta.',
+    autoLaunch: 'Iniciar al arrancar',
+    autoLaunchDesc: 'Inicia la aplicación automáticamente cuando el sistema arranca',
     serverPort: 'Puerto del servidor',
     serverPortDesc: 'El puerto en el que escucha el servidor. Se requiere reinicio después del cambio.',
 
@@ -1195,6 +1203,8 @@ export const translations = {
     thinkingOutput: 'Output Thinking',
     showThinkingProcess: 'Tampilkan proses Thinking',
     showThinkingProcessDesc: 'Saat diaktifkan, output thinking/reasoning diekspos melalui API yang kompatibel. Saat dinonaktifkan, output tersebut disembunyikan.',
+    autoLaunch: 'Mulai saat startup',
+    autoLaunchDesc: 'Secara otomatis memulai aplikasi saat sistem dinyalakan',
     serverPort: 'Port server',
     serverPortDesc: 'Port yang didengarkan server. Perlu restart setelah perubahan.',
 
@@ -1441,6 +1451,8 @@ export const translations = {
     thinkingOutput: 'Saída de Thinking',
     showThinkingProcess: 'Mostrar processo Thinking',
     showThinkingProcessDesc: 'Quando ativado, a saída de thinking/reasoning é exposta pelas APIs compatíveis. Quando desativado, essa saída fica oculta.',
+    autoLaunch: 'Iniciar na inicialização',
+    autoLaunchDesc: 'Inicia o aplicativo automaticamente quando o sistema é ligado',
     serverPort: 'Porta do servidor',
     serverPortDesc: 'A porta em que o servidor escuta. Reinício necessário após alteração.',
 
@@ -1687,6 +1699,8 @@ export const translations = {
     thinkingOutput: 'Thinking 出力',
     showThinkingProcess: 'Thinking プロセスを表示',
     showThinkingProcessDesc: '有効にすると、thinking/reasoning 出力が互換 API 経由で公開されます。無効にすると、その出力は非表示になります。',
+    autoLaunch: 'ログイン時に起動',
+    autoLaunchDesc: 'システム起動時にアプリを自動的に起動します',
     serverPort: 'サーバーポート',
     serverPortDesc: 'サーバーが待ち受けるポート番号。変更後は再起動が必要です。',
 
@@ -1933,6 +1947,8 @@ export const translations = {
     thinkingOutput: 'Thinking 출력',
     showThinkingProcess: 'Thinking 과정 표시',
     showThinkingProcessDesc: '활성화하면 thinking/reasoning 출력이 호환 API를 통해 노출됩니다. 비활성화하면 해당 출력이 숨겨집니다.',
+    autoLaunch: '시작 시 실행',
+    autoLaunchDesc: '시스템 부팅 시 앱을 자동으로 시작합니다',
     serverPort: '서버 포트',
     serverPortDesc: '서버가 수신하는 포트 번호입니다. 변경 후 재시작이 필요합니다.',
 

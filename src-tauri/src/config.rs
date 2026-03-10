@@ -38,6 +38,10 @@ pub struct AppConfig {
     pub log_level: String,
     pub debug_mode: String,
 
+    // System
+    #[serde(default)]
+    pub auto_launch: bool,
+
     // Client identity
     #[serde(default)]
     pub client_id: Option<String>,
@@ -62,6 +66,7 @@ impl Default for AppConfig {
             truncation_recovery: true,
             log_level: "INFO".to_string(),
             debug_mode: "off".to_string(),
+            auto_launch: false,
             client_id: None,
         }
     }

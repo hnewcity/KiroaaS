@@ -31,6 +31,9 @@ export interface AppConfig {
   log_level: string;
   debug_mode: string;
 
+  // System
+  auto_launch: boolean;
+
   // Client identity
   client_id?: string;
 }
@@ -48,6 +51,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   truncation_recovery: true,
   log_level: 'INFO',
   debug_mode: 'off',
+  auto_launch: false,
 };
 
 export interface ServerStatusInfo {

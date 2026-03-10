@@ -23,7 +23,18 @@
 
 ---
 
-> **📢 Pemberitahuan:** Versi berikutnya akan memperbaiki kompatibilitas dengan Claude Code v2.1.69+, yang mengirimkan blok konten `tool_reference` di dalam pesan `tool_result` saat menggunakan mekanisme alat tertunda ToolSearch.
+## ❤️ Sponsor
+
+<table>
+<tr>
+<td width="180"><a href="https://ai18n.chat"><img src="../public/sponsors/ai18n.png" alt="ai18n" width="150"></a></td>
+<td>Terima kasih kepada <a href="https://ai18n.chat">ai18n</a> atas sponsornya! ai18n adalah penyedia layanan relay API yang andal dan efisien, menawarkan relay model Claude untuk OpenClaw, Claude Code, Codex, Gemini, dan lainnya.</td>
+</tr>
+</table>
+
+---
+
+> ~~**📢 Pemberitahuan:** Versi berikutnya akan memperbaiki kompatibilitas dengan Claude Code v2.1.69+, yang mengirimkan blok konten `tool_reference` di dalam pesan `tool_result` saat menggunakan mekanisme alat tertunda ToolSearch.~~ ✅ Diperbaiki
 
 KiroaaS (Kiro as a Service) adalah gateway desktop yang mengekspos model AI Kiro melalui API lokal yang kompatibel dengan OpenAI dan Anthropic. Gunakan alat, pustaka, dan aplikasi AI favorit Anda dengan Kiro - tanpa perlu mengubah kode.
 

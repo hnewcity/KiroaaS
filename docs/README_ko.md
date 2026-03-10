@@ -23,7 +23,18 @@
 
 ---
 
-> **📢 공지사항:** 다음 버전에서는 Claude Code v2.1.69+와의 호환성 문제를 수정할 예정입니다. 이 버전은 ToolSearch 지연 도구 메커니즘을 사용할 때 `tool_result` 메시지 내에 `tool_reference` 콘텐츠 블록을 전송합니다.
+## ❤️ 스폰서
+
+<table>
+<tr>
+<td width="180"><a href="https://ai18n.chat"><img src="../public/sponsors/ai18n.png" alt="ai18n" width="150"></a></td>
+<td><a href="https://ai18n.chat">ai18n</a>의 후원에 감사드립니다! ai18n은 신뢰할 수 있고 효율적인 API 릴레이 서비스 제공업체로, OpenClaw, Claude Code, Codex, Gemini 등을 위한 Claude 모델 릴레이를 제공합니다.</td>
+</tr>
+</table>
+
+---
+
+> ~~**📢 공지사항:** 다음 버전에서는 Claude Code v2.1.69+와의 호환성 문제를 수정할 예정입니다. 이 버전은 ToolSearch 지연 도구 메커니즘을 사용할 때 `tool_result` 메시지 내에 `tool_reference` 콘텐츠 블록을 전송합니다.~~ ✅ 수정됨
 
 KiroaaS(Kiro as a Service)는 로컬 OpenAI 호환 및 Anthropic 호환 API를 통해 Kiro의 AI 모델을 제공하는 데스크톱 게이트웨이입니다. 코드 변경 없이 좋아하는 AI 도구, 라이브러리, 애플리케이션에서 Kiro를 사용하세요.
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { SettingsForm } from './components/SettingsForm';
-import type { SettingsHintKey } from './components/SettingsForm';
+import type { SettingsHintKey, SettingsFormHandle, SettingsFormStatus } from './components/SettingsForm';
 import { LogViewer } from './components/LogViewer';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { ApiExamples } from './components/ApiExamples';
@@ -28,7 +28,11 @@ import {
   Fingerprint,
   ShieldCheck,
   MessageCircle,
-  RotateCw
+  RotateCw,
+  Save,
+  AlertTriangle,
+  CheckCircle,
+  X,
 } from 'lucide-react';
 
 type View = 'dashboard' | 'settings' | 'logs' | 'chat';
@@ -56,6 +60,8 @@ export default function App() {
   const [settingsHint, setSettingsHint] = useState<SettingsHintKey>(null);
   const [isRestarting, setIsRestarting] = useState(false);
   const [isMac, setIsMac] = useState(true);
+  const [settingsStatus, setSettingsStatus] = useState<SettingsFormStatus | null>(null);
+  const settingsFormRef = useRef<SettingsFormHandle>(null);
   const lastLogLineRef = useRef('');
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -368,6 +374,65 @@ export default function App() {
                   )}
                   </>
                 )}
+
+                {/* Settings Save Button in Header */}
+                {currentView === 'settings' && (
+                  <div className="flex items-center gap-3">
+                    {settingsStatus?.hasChanges && isRunning && !settingsStatus.showRestartPrompt && (
+                      <div className="flex items-center text-amber-700 bg-amber-50 px-3 py-1.5 rounded-full text-xs font-medium animate-in fade-in">
+                        <AlertTriangle className="w-3.5 h-3.5 mr-1.5" />
+                        {t('configChangeHint')}
+                      </div>
+                    )}
+                    {settingsStatus?.error && (
+                      <div className="flex items-center text-red-500 bg-red-50 px-3 py-1.5 rounded-full text-xs font-medium animate-in fade-in">
+                        <X className="w-3.5 h-3.5 mr-1.5" />
+                        {settingsStatus.error}
+                      </div>
+                    )}
+                    {settingsStatus?.success && !settingsStatus.showRestartPrompt && (
+                      <div className="flex items-center text-lime-700 bg-lime-100 px-3 py-1.5 rounded-full text-xs font-medium animate-in fade-in">
+                        <CheckCircle className="w-3.5 h-3.5 mr-1.5" />
+                        {t('savedSuccessfully')}
+                      </div>
+                    )}
+                    {settingsStatus?.showRestartPrompt && (
+                      <div className="flex items-center gap-2 animate-in fade-in">
+                        <span className="text-xs text-stone-600">{t('configSavedRestartPrompt')}</span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => settingsFormRef.current?.skipRestart()}
+                          disabled={settingsStatus.isRestarting}
+                          className="h-9 px-3 rounded-full text-xs"
+                        >
+                          {t('skipRestart')}
+                        </Button>
+                        <Button
+                          type="button"
+                          onClick={() => settingsFormRef.current?.restart()}
+                          disabled={settingsStatus.isRestarting}
+                          className="h-9 px-4 rounded-full bg-lime-500 hover:bg-lime-600 text-black text-xs font-semibold"
+                        >
+                          {settingsStatus.isRestarting ? (
+                            <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />{t('starting')}</>
+                          ) : t('restartServer')}
+                        </Button>
+                      </div>
+                    )}
+                    <Button
+                      onClick={() => settingsFormRef.current?.submit()}
+                      disabled={settingsStatus?.isSaving}
+                      className="h-12 rounded-full px-6 font-semibold bg-[#111] hover:bg-black text-white shadow-lg transition-all duration-300"
+                    >
+                      {settingsStatus?.isSaving ? (
+                        <><Loader2 className="mr-2 h-5 w-5 animate-spin" />{t('savingChanges')}</>
+                      ) : (
+                        <><Save className="mr-2 h-5 w-5" />{t('saveConfiguration')}</>
+                      )}
+                    </Button>
+                  </div>
+                )}
               </div>
             </header>
           )}
@@ -470,7 +535,16 @@ export default function App() {
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 max-w-7xl pb-10">
                 <div className="lg:col-span-8 space-y-6 order-2 lg:order-1">
                   <div className="bg-white rounded-[32px] p-8 shadow-sm">
-                    <SettingsForm config={tempConfig} onSave={handleSaveConfig} isRunning={isRunning} onRestart={handleRestartServer} onHintChange={setSettingsHint} />
+                    <SettingsForm
+                      ref={settingsFormRef}
+                      config={tempConfig}
+                      onSave={handleSaveConfig}
+                      isRunning={isRunning}
+                      onRestart={handleRestartServer}
+                      onHintChange={setSettingsHint}
+                      hideActionBar
+                      onStatusChange={setSettingsStatus}
+                    />
                   </div>
                 </div>
                 <div className="lg:col-span-4 space-y-6 order-1 lg:order-2 sticky top-0 lg:static z-10">

@@ -23,7 +23,18 @@
 
 ---
 
-> **📢 公告：** 下个版本将修复与 Claude Code v2.1.69+ 的兼容性问题，该版本在使用 ToolSearch 延迟工具机制时会在 `tool_result` 消息中发送 `tool_reference` 内容块。
+## ❤️ 赞助商
+
+<table>
+<tr>
+<td width="180"><a href="https://ai18n.chat"><img src="../public/sponsors/ai18n.png" alt="ai18n" width="150"></a></td>
+<td>感谢 <a href="https://ai18n.chat">ai18n</a> 赞助本项目！ai18n 是一个可靠高效的 API 中转服务提供商，为 OpenClaw、Claude Code、Codex、Gemini 等提供 Claude 模型中转服务。</td>
+</tr>
+</table>
+
+---
+
+> ~~**📢 公告：** 下个版本将修复与 Claude Code v2.1.69+ 的兼容性问题，该版本在使用 ToolSearch 延迟工具机制时会在 `tool_result` 消息中发送 `tool_reference` 内容块。~~ ✅ 已修复
 
 KiroaaS（Kiro 即服务）是一个桌面网关应用，通过本地 OpenAI 兼容和 Anthropic 兼容的 API 暴露 Kiro 的 AI 模型。无需修改代码，即可使用您喜爱的 AI 工具、库和应用程序与 Kiro 交互。
 

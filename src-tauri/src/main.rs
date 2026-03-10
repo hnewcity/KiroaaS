@@ -6,6 +6,7 @@ mod config;
 mod conversations;
 mod server;
 
+use auto_launch::AutoLaunch;
 use config::{AppConfig, load_config, save_config};
 use conversations::{Conversation, ConversationsData, load_conversations, save_conversations};
 use server::{ServerManager, ServerStatus};
@@ -155,6 +156,37 @@ fn get_app_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
 }
 
+fn apply_auto_launch(enabled: bool) -> Result<(), String> {
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Failed to get executable path: {}", e))?;
+
+    // On macOS, walk up from .app/Contents/MacOS/binary to the .app bundle
+    #[cfg(target_os = "macos")]
+    let app_path = {
+        let mut found = None;
+        let mut p = exe_path.as_path();
+        while let Some(parent) = p.parent() {
+            if p.extension().and_then(|e| e.to_str()) == Some("app") {
+                found = Some(p.to_path_buf());
+                break;
+            }
+            p = parent;
+        }
+        found.unwrap_or(exe_path)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let app_path = exe_path;
+
+    let app_str = app_path.to_str()
+        .ok_or_else(|| "App path is not valid UTF-8".to_string())?;
+    let auto = AutoLaunch::new("KiroaaS", app_str, true, &[] as &[&str]);
+    if enabled {
+        auto.enable().map_err(|e| format!("Failed to enable auto-launch: {}", e))
+    } else {
+        auto.disable().map_err(|e| format!("Failed to disable auto-launch: {}", e))
+    }
+}
+
 /// Get the device model name
 #[tauri::command]
 fn get_device_model() -> String {
@@ -224,6 +256,9 @@ async fn clear_server_logs(state: State<'_, AppState>) -> Result<(), String> {
 /// Save configuration to disk
 #[tauri::command]
 async fn save_config_cmd(config: AppConfig) -> Result<(), String> {
+    if let Err(e) = apply_auto_launch(config.auto_launch) {
+        eprintln!("[Config] Auto-launch apply failed (non-fatal): {}", e);
+    }
     save_config(&config).await
 }
 
@@ -540,6 +575,18 @@ fn main() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             macos_dock::setup_dock_click_handler(app.handle());
+
+            tauri::async_runtime::spawn(async {
+                match load_config().await {
+                    Ok(config) => {
+                        if let Err(e) = apply_auto_launch(config.auto_launch) {
+                            eprintln!("[Setup] Auto-launch apply failed: {}", e);
+                        }
+                    }
+                    Err(e) => eprintln!("[Setup] Failed to load config for auto-launch: {}", e),
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

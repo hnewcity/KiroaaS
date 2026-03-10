@@ -22,7 +22,18 @@
 
 ---
 
-> **📢 Notice:** The next version will fix compatibility with Claude Code v2.1.69+, which sends `tool_reference` content blocks inside `tool_result` messages when using the ToolSearch deferred tool mechanism.
+## ❤️ Sponsor
+
+<table>
+<tr>
+<td width="180"><a href="https://ai18n.chat"><img src="public/sponsors/ai18n.png" alt="ai18n" width="150"></a></td>
+<td>Thanks to <a href="https://ai18n.chat">ai18n</a> for sponsoring this project! ai18n is a reliable and efficient API relay service provider, offering relay Claude models for OpenClaw, Claude Code, Codex, Gemini, and more.</td>
+</tr>
+</table>
+
+---
+
+> ~~**📢 Notice:** The next version will fix compatibility with Claude Code v2.1.69+, which sends `tool_reference` content blocks inside `tool_result` messages when using the ToolSearch deferred tool mechanism.~~ ✅ Fixed
 
 KiroaaS (Kiro as a Service) is a desktop gateway that exposes Kiro's AI models through a local OpenAI-compatible and Anthropic-compatible API. Use your favorite AI tools, libraries, and applications with Kiro - no code changes required.
 

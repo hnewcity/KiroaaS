@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useImperativeHandle, forwardRef } from 'react';
 import { useI18n } from '@/hooks/useI18n';
 import type { AppConfig, AuthMethod } from '@/lib/config';
 import { scanAllCredentials, type CredentialScanResult, /* installUpdate, */ getAppVersion } from '@/lib/tauri';
@@ -7,10 +7,25 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText, Network, Wifi, AlertTriangle, Brain, Box } from 'lucide-react';
+import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText, Network, Wifi, AlertTriangle, Brain, Box, Power } from 'lucide-react';
 import { Loader2 } from 'lucide-react';
 
 export type SettingsHintKey = 'auth_cli_db' | 'auth_creds_file' | 'auth_refresh_token' | 'proxy_api_key' | 'generate' | 'check_update' | 'save' | null;
+
+export interface SettingsFormStatus {
+    isSaving: boolean;
+    error: string | null;
+    success: boolean;
+    showRestartPrompt: boolean;
+    isRestarting: boolean;
+    hasChanges: boolean;
+}
+
+export interface SettingsFormHandle {
+    submit: () => void;
+    restart: () => void;
+    skipRestart: () => void;
+}
 
 interface SettingsFormProps {
     config: AppConfig;
@@ -18,9 +33,14 @@ interface SettingsFormProps {
     isRunning?: boolean;
     onRestart?: () => Promise<void>;
     onHintChange?: (hint: SettingsHintKey) => void;
+    hideActionBar?: boolean;
+    onStatusChange?: (status: SettingsFormStatus) => void;
 }
 
-export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChange }: SettingsFormProps) {
+export const SettingsForm = forwardRef<SettingsFormHandle, SettingsFormProps>(function SettingsForm(
+    { config, onSave, isRunning, onRestart, onHintChange, hideActionBar, onStatusChange }: SettingsFormProps,
+    ref
+) {
     const { t } = useI18n();
     const [formData, setFormData] = useState<AppConfig>(config);
     const [isSaving, setIsSaving] = useState(false);
@@ -47,6 +67,18 @@ export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChang
     useEffect(() => {
         setFormData(config);
     }, [config]);
+
+    // Notify parent of status changes
+    useEffect(() => {
+        onStatusChange?.({
+            isSaving,
+            error,
+            success,
+            showRestartPrompt,
+            isRestarting,
+            hasChanges: JSON.stringify(formData) !== JSON.stringify(config),
+        });
+    }, [isSaving, error, success, showRestartPrompt, isRestarting, formData, config]);
 
     // Auto-scan on mount (for displaying detected path chips)
     useEffect(() => {
@@ -102,6 +134,16 @@ export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChang
         setTimeout(() => setSuccess(false), 3000);
     };
 
+    // Expose submit/restart/skipRestart to parent via ref
+    useImperativeHandle(ref, () => ({
+        submit: () => {
+            const form = document.getElementById('settings-form') as HTMLFormElement | null;
+            form?.requestSubmit();
+        },
+        restart: handleRestart,
+        skipRestart: handleSkipRestart,
+    }));
+
     const updateField = <K extends keyof AppConfig>(
         field: K,
         value: AppConfig[K]
@@ -153,7 +195,7 @@ export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChang
     const hintLeave = () => onHintChange?.(null);
 
     return (
-        <form onSubmit={handleSubmit} className="space-y-8">
+        <form id="settings-form" onSubmit={handleSubmit} className="space-y-8">
 
             {/* 1. Authentication Section */}
             <div className="space-y-6">
@@ -296,6 +338,34 @@ export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChang
                         <Switch
                             checked={formData.fake_reasoning}
                             onCheckedChange={(checked) => updateField('fake_reasoning', checked)}
+                        />
+                    </div>
+                </div>
+            </div>
+
+            {/* System — Auto-launch */}
+            <div className="space-y-6 pt-4">
+                <div className="flex items-center gap-3 pb-2 border-b border-stone-100">
+                    <div className="h-10 w-10 rounded-full bg-stone-100 flex items-center justify-center">
+                        <Power className="h-5 w-5 text-stone-600" />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-[#111]">{t('autoLaunch')}</h3>
+                        <p className="text-sm text-stone-500">{t('autoLaunchDesc')}</p>
+                    </div>
+                </div>
+                <div className="bg-[#F8F8F8] p-6 rounded-[24px]">
+                    <div className="flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-3">
+                            <Power className="h-5 w-5 text-stone-400" />
+                            <div>
+                                <Label className="text-sm font-semibold text-[#111]">{t('autoLaunch')}</Label>
+                                <p className="text-xs text-stone-500 mt-0.5">{t('autoLaunchDesc')}</p>
+                            </div>
+                        </div>
+                        <Switch
+                            checked={formData.auto_launch}
+                            onCheckedChange={(checked) => updateField('auto_launch', checked)}
                         />
                     </div>
                 </div>
@@ -486,6 +556,7 @@ export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChang
             </div>
 
             {/* Action Bar */}
+            {!hideActionBar && (
             <div className="rounded-xl pt-6 flex justify-end gap-4">
                 {JSON.stringify(formData) !== JSON.stringify(config) && isRunning && !showRestartPrompt && (
                     <div className="flex items-center text-amber-700 bg-amber-50 px-4 py-2 rounded-full text-sm font-medium animate-in fade-in">
@@ -555,7 +626,8 @@ export function SettingsForm({ config, onSave, isRunning, onRestart, onHintChang
                     )}
                 </Button>
             </div>
+            )}
 
         </form>
     );
-}
+});
