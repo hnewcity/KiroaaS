@@ -518,7 +518,7 @@ export const SettingsForm = forwardRef<SettingsFormHandle, SettingsFormProps>(fu
                             </div>
                         </div>
                         <div className="flex gap-2 mt-4">
-                            {updateInfo?.hasUpdate && (
+                            {updateInfo?.hasUpdate ? (
                                 <Button
                                     type="button"
                                     onClick={handleInstallUpdate}
@@ -527,24 +527,24 @@ export const SettingsForm = forwardRef<SettingsFormHandle, SettingsFormProps>(fu
                                 >
                                     {t('downloadUpdate')}
                                 </Button>
+                            ) : (
+                                <Button
+                                    type="button"
+                                    onClick={handleCheckUpdate}
+                                    disabled={isCheckingUpdate}
+                                    size="sm"
+                                    className="rounded-xl text-xs bg-[#111] text-white hover:bg-black"
+                                >
+                                    {isCheckingUpdate ? (
+                                        <>
+                                            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                                            {t('checkingForUpdates')}
+                                        </>
+                                    ) : (
+                                        t('checkForUpdates')
+                                    )}
+                                </Button>
                             )}
-                            <Button
-                                type="button"
-                                variant={updateInfo?.hasUpdate ? 'outline' : 'default'}
-                                onClick={handleCheckUpdate}
-                                disabled={isCheckingUpdate}
-                                size="sm"
-                                className={`rounded-xl text-xs ${updateInfo?.hasUpdate ? 'border-lime-800/20 text-lime-950 hover:bg-lime-200/50' : 'bg-[#111] text-white hover:bg-black'}`}
-                            >
-                                {isCheckingUpdate ? (
-                                    <>
-                                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                                        {t('checkingForUpdates')}
-                                    </>
-                                ) : (
-                                    t('checkForUpdates')
-                                )}
-                            </Button>
                         </div>
                     </div>
                 </div>
