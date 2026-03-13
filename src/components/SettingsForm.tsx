@@ -1,14 +1,14 @@
 import { useState, useEffect, useImperativeHandle, forwardRef } from 'react';
 import { useI18n } from '@/hooks/useI18n';
 import type { AppConfig, AuthMethod } from '@/lib/config';
-import { scanAllCredentials, type CredentialScanResult, /* installUpdate, */ getAppVersion } from '@/lib/tauri';
+import { scanAllCredentials, type CredentialScanResult, /* installUpdate, */ getAppVersion, startServer, stopServer, getPortOccupier, terminateProcess } from '@/lib/tauri';
 import { open as shellOpen } from '@tauri-apps/api/shell';
 import { checkVersionUpdate, type UpdateInfo } from '@/lib/versionCheck';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText, Network, Wifi, AlertTriangle, Brain, Box, Power } from 'lucide-react';
+import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText, Network, Wifi, AlertTriangle, Brain, Box, Power, Wrench } from 'lucide-react';
 import { Loader2 } from 'lucide-react';
 
 export type SettingsHintKey = 'auth_cli_db' | 'auth_creds_file' | 'auth_refresh_token' | 'proxy_api_key' | 'generate' | 'check_update' | 'save' | null;
@@ -38,6 +38,14 @@ interface SettingsFormProps {
     onStatusChange?: (status: SettingsFormStatus) => void;
 }
 
+interface PendingPortOccupier {
+    pid: number;
+    processName: string;
+    command: string;
+    port: number;
+    config: AppConfig;
+}
+
 export const SettingsForm = forwardRef<SettingsFormHandle, SettingsFormProps>(function SettingsForm(
     { config, onSave, isRunning, onRestart, onHintChange, hideActionBar, onStatusChange }: SettingsFormProps,
     ref
@@ -51,6 +59,10 @@ export const SettingsForm = forwardRef<SettingsFormHandle, SettingsFormProps>(fu
     const [isRestarting, setIsRestarting] = useState(false);
     const [scanResult, setScanResult] = useState<CredentialScanResult | null>(null);
     const [showApiKey, setShowApiKey] = useState(false);
+    const [isRepairing, setIsRepairing] = useState(false);
+    const [repairMessage, setRepairMessage] = useState<string | null>(null);
+    const [repairError, setRepairError] = useState<string | null>(null);
+    const [pendingOccupier, setPendingOccupier] = useState<PendingPortOccupier | null>(null);
 
     // Update check state
     const [appVersion, setAppVersion] = useState('');
@@ -152,10 +164,198 @@ export const SettingsForm = forwardRef<SettingsFormHandle, SettingsFormProps>(fu
         setFormData((prev) => ({ ...prev, [field]: value }));
     };
 
-    const generateApiKey = () => {
+    const generateApiKeyValue = () => {
         const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
         const key = Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-        updateField('proxy_api_key', `sk-${key}`);
+        return `sk-${key}`;
+    };
+
+    const generateApiKey = () => {
+        updateField('proxy_api_key', generateApiKeyValue());
+    };
+
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const fmt = (template: string, vars: Record<string, string | number>) => {
+        let result = template;
+        Object.entries(vars).forEach(([key, value]) => {
+            result = result.replace(`{${key}}`, String(value));
+        });
+        return result;
+    };
+
+    const waitForHealth = async (host: string, port: number, timeoutMs = 20000) => {
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+            try {
+                const response = await fetch(`http://${host}:${port}/health`, {
+                    method: 'GET',
+                    cache: 'no-store',
+                });
+                if (response.ok) return;
+            } catch {
+                // Keep polling until timeout
+            }
+            await sleep(500);
+        }
+        throw new Error(t('serviceRepairHealthTimeout'));
+    };
+
+    const checkModelsStatus = async (host: string, port: number, apiKey: string): Promise<number> => {
+        try {
+            const response = await fetch(`http://${host}:${port}/v1/models`, {
+                method: 'GET',
+                headers: {
+                    Authorization: `Bearer ${apiKey}`,
+                },
+                cache: 'no-store',
+            });
+            return response.status;
+        } catch {
+            return 0;
+        }
+    };
+
+    const classifyRepairError = (status: number): string => {
+        if (status === 0) return t('serviceRepairConnectionFailed');
+        if (status === 401) return t('serviceRepairKeyMismatch');
+        if (status === 403) return t('serviceRepairCredentialIssue');
+        return t('serviceRepairFailedWithStatus').replace('{status}', String(status));
+    };
+
+    const queuePortOccupierConfirmation = async (port: number, configForRetry: AppConfig): Promise<boolean> => {
+        const occupier = await getPortOccupier(port);
+        if (!occupier) return false;
+
+        const processName = occupier.process_name || 'unknown';
+        const command = occupier.command || '';
+        setPendingOccupier({
+            pid: occupier.pid,
+            processName,
+            command,
+            port,
+            config: configForRetry,
+        });
+        setRepairMessage(fmt(t('serviceRepairPortConflictPrompt'), {
+            name: processName,
+            pid: occupier.pid,
+            port,
+        }));
+        return true;
+    };
+
+    const restartAndWait = async (nextConfig: AppConfig, host: string, port: number): Promise<boolean> => {
+        try {
+            await stopServer();
+        } catch {
+            // It's fine if server was not running
+        }
+        await sleep(400);
+        const hasOccupier = await queuePortOccupierConfirmation(port, nextConfig);
+        if (hasOccupier) {
+            return false;
+        }
+        await startServer(nextConfig);
+        await waitForHealth(host, port);
+        return true;
+    };
+
+    const handleConfirmCloseOccupier = async () => {
+        if (!pendingOccupier) return;
+
+        setIsRepairing(true);
+        setRepairError(null);
+        setRepairMessage(fmt(t('serviceRepairKillingProcess'), {
+            name: pendingOccupier.processName,
+            pid: pendingOccupier.pid,
+        }));
+
+        const fetchHost = pendingOccupier.config.server_host === '0.0.0.0' ? '127.0.0.1' : pendingOccupier.config.server_host;
+
+        try {
+            await terminateProcess(pendingOccupier.pid);
+            setPendingOccupier(null);
+            await sleep(600);
+            const restarted = await restartAndWait(pendingOccupier.config, fetchHost, pendingOccupier.port);
+            if (!restarted) return;
+
+            const status = await checkModelsStatus(
+                fetchHost,
+                pendingOccupier.port,
+                pendingOccupier.config.proxy_api_key
+            );
+
+            if (status === 200) {
+                setRepairMessage(t('serviceRepairSuccessAfterPortCleanup'));
+                setPendingOccupier(null);
+                return;
+            }
+
+            throw new Error(classifyRepairError(status));
+        } catch (err) {
+            setRepairError(err instanceof Error ? err.message : t('serviceRepairConnectionFailed'));
+        } finally {
+            setIsRepairing(false);
+        }
+    };
+
+    const handleCancelCloseOccupier = () => {
+        setPendingOccupier(null);
+        setRepairError(t('serviceRepairPortCloseCancelled'));
+    };
+
+    const handleRepairService = async () => {
+        setIsRepairing(true);
+        setRepairError(null);
+        setRepairMessage(t('serviceRepairRunning'));
+        setPendingOccupier(null);
+
+        const fetchHost = formData.server_host === '0.0.0.0' ? '127.0.0.1' : formData.server_host;
+        const serverPort = formData.server_port || 8000;
+        let activeConfig = formData;
+
+        try {
+            const firstRestarted = await restartAndWait(activeConfig, fetchHost, serverPort);
+            if (!firstRestarted) return;
+
+            let modelStatus = await checkModelsStatus(fetchHost, serverPort, activeConfig.proxy_api_key);
+            if (modelStatus === 200) {
+                setRepairMessage(t('serviceRepairSuccess'));
+                return;
+            }
+
+            if (modelStatus === 401) {
+                setRepairMessage(t('serviceRepairRotatingKey'));
+                const rotatedKey = generateApiKeyValue();
+                const nextConfig = { ...formData, proxy_api_key: rotatedKey };
+                activeConfig = nextConfig;
+
+                await onSave(nextConfig);
+                setFormData(nextConfig);
+
+                const secondRestarted = await restartAndWait(nextConfig, fetchHost, serverPort);
+                if (!secondRestarted) return;
+                modelStatus = await checkModelsStatus(fetchHost, serverPort, rotatedKey);
+
+                if (modelStatus === 200) {
+                    setRepairMessage(t('serviceRepairSuccessWithKeyReset'));
+                    return;
+                }
+            }
+
+            if (modelStatus === 401) {
+                const hasOccupier = await queuePortOccupierConfirmation(serverPort, activeConfig);
+                if (hasOccupier) {
+                    return;
+                }
+            }
+
+            throw new Error(classifyRepairError(modelStatus));
+        } catch (err) {
+            setRepairError(err instanceof Error ? err.message : t('serviceRepairConnectionFailed'));
+        } finally {
+            setIsRepairing(false);
+        }
     };
 
     const handleCheckUpdate = async () => {
@@ -430,6 +630,75 @@ export const SettingsForm = forwardRef<SettingsFormHandle, SettingsFormProps>(fu
                         <p className="text-xs text-stone-500 pl-1">
                             {t('clientsIncludeKey')}
                         </p>
+                    </div>
+
+                    <div className="pt-2 border-t border-stone-200/80">
+                        <div className="flex items-center justify-between gap-4">
+                            <div>
+                                <Label className="text-sm font-semibold text-[#111]">{t('repairService')}</Label>
+                                <p className="text-xs text-stone-500 mt-0.5">{t('serviceRepairDesc')}</p>
+                            </div>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                onClick={handleRepairService}
+                                disabled={isRepairing || isSaving}
+                                className="h-11 px-5 rounded-xl border-stone-200 hover:bg-white hover:border-black hover:text-black transition-all"
+                            >
+                                {isRepairing ? (
+                                    <>
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        {t('serviceRepairRunningShort')}
+                                    </>
+                                ) : (
+                                    <>
+                                        <Wrench className="mr-2 h-4 w-4" />
+                                        {t('repairService')}
+                                    </>
+                                )}
+                            </Button>
+                        </div>
+                        {repairMessage && (
+                            <p className="text-xs text-lime-700 mt-3">{repairMessage}</p>
+                        )}
+                        {repairError && (
+                            <p className="text-xs text-red-600 mt-2">{repairError}</p>
+                        )}
+                        {pendingOccupier && (
+                            <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200 space-y-3">
+                                <p className="text-xs text-amber-800">
+                                    {fmt(t('serviceRepairPortConflictPrompt'), {
+                                        name: pendingOccupier.processName,
+                                        pid: pendingOccupier.pid,
+                                        port: pendingOccupier.port,
+                                    })}
+                                </p>
+                                {pendingOccupier.command && (
+                                    <p className="text-[11px] text-amber-700 break-all font-mono">
+                                        {pendingOccupier.command}
+                                    </p>
+                                )}
+                                <div className="flex gap-2">
+                                    <Button
+                                        type="button"
+                                        onClick={handleConfirmCloseOccupier}
+                                        disabled={isRepairing}
+                                        className="h-9 px-4 rounded-lg bg-amber-500 hover:bg-amber-600 text-black text-xs font-semibold"
+                                    >
+                                        {t('serviceRepairCloseOccupierAndContinue')}
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={handleCancelCloseOccupier}
+                                        disabled={isRepairing}
+                                        className="h-9 px-4 rounded-lg text-xs"
+                                    >
+                                        {t('serviceRepairKeepOccupier')}
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>

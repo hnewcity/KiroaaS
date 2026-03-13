@@ -54,6 +54,20 @@ export async function clearServerLogs(): Promise<void> {
   return await invoke('clear_server_logs');
 }
 
+export interface PortOccupierInfo {
+  pid: number;
+  process_name: string;
+  command: string;
+}
+
+export async function getPortOccupier(port: number): Promise<PortOccupierInfo | null> {
+  return await invoke('get_port_occupier', { port });
+}
+
+export async function terminateProcess(pid: number): Promise<void> {
+  return await invoke('terminate_process', { pid });
+}
+
 export async function checkForUpdates(): Promise<boolean> {
   return await invoke('check_for_updates');
 }

@@ -12,6 +12,7 @@ use conversations::{Conversation, ConversationsData, load_conversations, save_co
 use server::{ServerManager, ServerStatus};
 use tauri::{Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu, CustomMenuItem, AppHandle};
 use tokio::sync::Mutex;
+use std::process::Command;
 
 #[cfg(target_os = "macos")]
 mod macos_dock {
@@ -253,6 +254,195 @@ async fn clear_server_logs(state: State<'_, AppState>) -> Result<(), String> {
     let mut manager = state.server_manager.lock().await;
     manager.clear_logs();
     Ok(())
+}
+
+#[derive(Debug, serde::Serialize)]
+struct PortOccupierInfo {
+    pid: u32,
+    process_name: String,
+    command: String,
+}
+
+#[cfg(unix)]
+fn get_process_command(pid: u32) -> String {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output();
+    if let Ok(out) = output {
+        if out.status.success() {
+            return String::from_utf8_lossy(&out.stdout).trim().to_string();
+        }
+    }
+    String::new()
+}
+
+#[cfg(windows)]
+fn get_process_command(pid: u32) -> String {
+    let output = Command::new("wmic")
+        .args([
+            "process",
+            "where",
+            &format!("ProcessId={}", pid),
+            "get",
+            "CommandLine",
+            "/value",
+        ])
+        .creation_flags(0x08000000)
+        .output();
+    if let Ok(out) = output {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                if let Some(rest) = line.strip_prefix("CommandLine=") {
+                    return rest.trim().to_string();
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+/// Detect which process is listening on a TCP port.
+#[tauri::command]
+async fn get_port_occupier(port: u16) -> Result<Option<PortOccupierInfo>, String> {
+    #[cfg(unix)]
+    {
+        let output = Command::new("lsof")
+            .args([
+                "-nP",
+                &format!("-iTCP:{}", port),
+                "-sTCP:LISTEN",
+                "-Fpc",
+            ])
+            .output()
+            .map_err(|e| format!("Failed to execute lsof: {}", e))?;
+
+        if !output.status.success() {
+            return Ok(None);
+        }
+
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut pid: Option<u32> = None;
+        let mut process_name = String::new();
+
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix('p') {
+                if pid.is_none() {
+                    pid = rest.trim().parse::<u32>().ok();
+                }
+            } else if let Some(rest) = line.strip_prefix('c') {
+                if process_name.is_empty() {
+                    process_name = rest.trim().to_string();
+                }
+            }
+            if pid.is_some() && !process_name.is_empty() {
+                break;
+            }
+        }
+
+        if let Some(found_pid) = pid {
+            let command = get_process_command(found_pid);
+            return Ok(Some(PortOccupierInfo {
+                pid: found_pid,
+                process_name,
+                command,
+            }));
+        }
+
+        return Ok(None);
+    }
+
+    #[cfg(windows)]
+    {
+        let output = Command::new("netstat")
+            .args(["-ano", "-p", "tcp"])
+            .creation_flags(0x08000000)
+            .output()
+            .map_err(|e| format!("Failed to execute netstat: {}", e))?;
+
+        if !output.status.success() {
+            return Ok(None);
+        }
+
+        let text = String::from_utf8_lossy(&output.stdout);
+        let needle = format!(":{}", port);
+        let mut found_pid: Option<u32> = None;
+
+        for line in text.lines() {
+            if !line.contains("LISTENING") || !line.contains(&needle) {
+                continue;
+            }
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            if let Some(pid_col) = cols.last() {
+                found_pid = pid_col.parse::<u32>().ok();
+                if found_pid.is_some() {
+                    break;
+                }
+            }
+        }
+
+        if let Some(pid) = found_pid {
+            let process_name = {
+                let out = Command::new("tasklist")
+                    .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
+                    .creation_flags(0x08000000)
+                    .output();
+                if let Ok(o) = out {
+                    if o.status.success() {
+                        let row = String::from_utf8_lossy(&o.stdout);
+                        let first = row.lines().next().unwrap_or("").trim();
+                        if let Some(stripped) = first.strip_prefix('"') {
+                            stripped.split('"').next().unwrap_or("").to_string()
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            };
+
+            let command = get_process_command(pid);
+            return Ok(Some(PortOccupierInfo {
+                pid,
+                process_name,
+                command,
+            }));
+        }
+
+        return Ok(None);
+    }
+}
+
+/// Terminate a process by PID (used only after explicit user confirmation in UI).
+#[tauri::command]
+async fn terminate_process(pid: u32) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        unsafe {
+            if libc::kill(pid as i32, libc::SIGTERM) != 0 {
+                return Err(format!("Failed to terminate process {} with SIGTERM", pid));
+            }
+        }
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
+        let output = Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .creation_flags(0x08000000)
+            .output()
+            .map_err(|e| format!("Failed to execute taskkill: {}", e))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        return Err(format!("Failed to terminate process {}", pid));
+    }
 }
 
 /// Save configuration to disk
@@ -611,6 +801,8 @@ fn main() {
             get_server_status,
             get_server_logs,
             clear_server_logs,
+            get_port_occupier,
+            terminate_process,
             save_config_cmd,
             load_config_cmd,
             validate_credentials,
