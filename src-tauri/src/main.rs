@@ -18,6 +18,7 @@ use std::process::Command;
 mod macos_dock {
     use cocoa::appkit::NSApp;
     use cocoa::base::{id, BOOL, YES, NO};
+    use cocoa::foundation::NSInteger;
     use objc::runtime::{Class, Object, Sel};
     use objc::{msg_send, sel, sel_impl};
     use tauri::Manager;
@@ -62,6 +63,20 @@ mod macos_dock {
         }
     }
 
+    /// Toggle Dock icon visibility on macOS by switching activation policy.
+    /// visible=true  => Regular (shows in Dock)
+    /// visible=false => Accessory (hidden from Dock, still available in tray)
+    pub fn set_dock_visible(visible: bool) {
+        unsafe {
+            let ns_app = NSApp();
+            let policy: NSInteger = if visible { 0 } else { 1 };
+            let _: BOOL = msg_send![ns_app, setActivationPolicy: policy];
+            if visible {
+                let _: () = msg_send![ns_app, activateIgnoringOtherApps: YES];
+            }
+        }
+    }
+
     extern "C" fn application_should_handle_reopen(
         _this: &Object,
         _cmd: Sel,
@@ -73,6 +88,7 @@ mod macos_dock {
             if ptr != 0 {
                 let app_handle = unsafe { &*(ptr as *const tauri::AppHandle) };
                 if let Some(window) = app_handle.get_window("main") {
+                    set_dock_visible(true);
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
@@ -687,7 +703,11 @@ fn main() {
                 let window = app.get_window("main").unwrap();
                 if window.is_visible().unwrap_or(false) {
                     let _ = window.hide();
+                    #[cfg(target_os = "macos")]
+                    macos_dock::set_dock_visible(false);
                 } else {
+                    #[cfg(target_os = "macos")]
+                    macos_dock::set_dock_visible(true);
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
@@ -742,12 +762,16 @@ fn main() {
                 }
                 "show" => {
                     let window = app.get_window("main").unwrap();
+                    #[cfg(target_os = "macos")]
+                    macos_dock::set_dock_visible(true);
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
                 "hide" => {
                     let window = app.get_window("main").unwrap();
                     let _ = window.hide();
+                    #[cfg(target_os = "macos")]
+                    macos_dock::set_dock_visible(false);
                 }
                 "quit" => {
                     let state: State<AppState> = app.state();
@@ -821,10 +845,22 @@ fn main() {
             update_tray_language,
         ])
         .on_window_event(|event| {
+            #[cfg(target_os = "macos")]
+            {
+                if event.window().is_minimized().unwrap_or(false) {
+                    // Convert minimize behavior to "hide to tray": no Dock item while minimized.
+                    let _ = event.window().unminimize();
+                    let _ = event.window().hide();
+                    macos_dock::set_dock_visible(false);
+                    return;
+                }
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event.event() {
                 // Hide the window instead of closing — service keeps running
                 api.prevent_close();
                 let _ = event.window().hide();
+                #[cfg(target_os = "macos")]
+                macos_dock::set_dock_visible(false);
             }
         })
         .run(tauri::generate_context!())
