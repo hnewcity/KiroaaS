@@ -196,6 +196,86 @@ impl ServerManager {
         // Store the process
         self.process = Some(child);
 
+        // Poll /health endpoint until the server is truly ready
+        let health_url = {
+            let host = if config.server_host == "0.0.0.0" {
+                "127.0.0.1"
+            } else {
+                &config.server_host
+            };
+            format!("http://{}:{}/health", host, config.server_port)
+        };
+
+        let timeout = std::time::Duration::from_secs(30);
+        let poll_interval = std::time::Duration::from_millis(500);
+        let start_time = std::time::Instant::now();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+        loop {
+            // Check if the process has died during startup
+            if let Some(ref mut proc) = self.process {
+                match proc.try_wait() {
+                    Ok(Some(exit_status)) => {
+                        self.process = None;
+                        let err_msg = format!("Server process exited during startup: {}", exit_status);
+                        if let Ok(mut logs) = self.logs.lock() {
+                            logs.push(format!("[Error] {}", err_msg));
+                        }
+                        self.status = ServerStatus {
+                            status: "error".to_string(),
+                            port: None,
+                            error: Some(err_msg.clone()),
+                        };
+                        return Err(err_msg);
+                    }
+                    Ok(None) => {} // Still running, good
+                    Err(e) => {
+                        let err_msg = format!("Failed to check process status: {}", e);
+                        self.status = ServerStatus {
+                            status: "error".to_string(),
+                            port: None,
+                            error: Some(err_msg.clone()),
+                        };
+                        return Err(err_msg);
+                    }
+                }
+            }
+
+            // Try health check
+            match client.get(&health_url).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    if let Ok(mut logs) = self.logs.lock() {
+                        logs.push(format!("Health check passed: {}", health_url));
+                    }
+                    break;
+                }
+                _ => {}
+            }
+
+            // Check timeout
+            if start_time.elapsed() > timeout {
+                let err_msg = format!(
+                    "Server failed to become healthy within {}s (health URL: {})",
+                    timeout.as_secs(),
+                    health_url
+                );
+                if let Ok(mut logs) = self.logs.lock() {
+                    logs.push(format!("[Error] {}", err_msg));
+                }
+                self.status = ServerStatus {
+                    status: "error".to_string(),
+                    port: Some(config.server_port),
+                    error: Some(err_msg.clone()),
+                };
+                return Err(err_msg);
+            }
+
+            tokio::time::sleep(poll_interval).await;
+        }
+
         // Update status to running
         self.status = ServerStatus {
             status: "running".to_string(),

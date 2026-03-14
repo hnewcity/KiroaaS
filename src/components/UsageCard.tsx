@@ -30,16 +30,20 @@ interface UsageData {
   [key: string]: unknown;
 }
 
+// Module-level cache so data survives component unmount/remount
+let cachedUsage: UsageData | null = null;
+
 export function UsageCard({ host, port, apiKey, isRunning }: UsageCardProps) {
   const { t } = useI18n();
-  const [usage, setUsage] = useState<UsageData | null>(null);
+  const [usage, setUsage] = useState<UsageData | null>(cachedUsage);
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchUsage = useCallback(async (): Promise<boolean> => {
     if (!isRunning || !apiKey) return false;
-    setLoading(true);
+    // Only show loading skeleton when there's no existing data
+    if (!cachedUsage) setLoading(true);
     setError(null);
     try {
       const fetchHost = host === '0.0.0.0' ? '127.0.0.1' : host;
@@ -49,6 +53,7 @@ export function UsageCard({ host, port, apiKey, isRunning }: UsageCardProps) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: UsageData = await res.json();
       setUsage(data);
+      cachedUsage = data;
       // Sync tray menu
       const bd = data.usageBreakdownList?.[0];
       const lim = bd?.usageLimitWithPrecision ?? bd?.usageLimit ?? 0;
@@ -59,7 +64,10 @@ export function UsageCard({ host, port, apiKey, isRunning }: UsageCardProps) {
       }
       return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'error');
+      // Only show error if there's no existing data to display
+      if (!cachedUsage) {
+        setError(e instanceof Error ? e.message : 'error');
+      }
       return false;
     } finally {
       setLoading(false);
@@ -69,6 +77,7 @@ export function UsageCard({ host, port, apiKey, isRunning }: UsageCardProps) {
   useEffect(() => {
     if (!isRunning) {
       setUsage(null); setError(null); setRetrying(false);
+      cachedUsage = null;
       updateTrayUsage('Credit: --').catch(() => {});
       return;
     }
