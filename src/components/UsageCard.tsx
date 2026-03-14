@@ -34,10 +34,11 @@ export function UsageCard({ host, port, apiKey, isRunning }: UsageCardProps) {
   const { t } = useI18n();
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchUsage = useCallback(async () => {
-    if (!isRunning || !apiKey) return;
+  const fetchUsage = useCallback(async (): Promise<boolean> => {
+    if (!isRunning || !apiKey) return false;
     setLoading(true);
     setError(null);
     try {
@@ -56,22 +57,46 @@ export function UsageCard({ host, port, apiKey, isRunning }: UsageCardProps) {
         const p = Math.min(100, Math.round((cur / lim) * 100));
         updateTrayUsage(`Credit: ${cur.toLocaleString()} / ${lim.toLocaleString()} (${p}%)`).catch(() => {});
       }
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'error');
+      return false;
     } finally {
       setLoading(false);
     }
   }, [host, port, apiKey, isRunning]);
 
   useEffect(() => {
-    if (isRunning) {
-      fetchUsage();
-      const timer = setInterval(fetchUsage, 10 * 60 * 1000);
-      return () => clearInterval(timer);
-    } else {
-      setUsage(null); setError(null);
+    if (!isRunning) {
+      setUsage(null); setError(null); setRetrying(false);
       updateTrayUsage('Credit: --').catch(() => {});
+      return;
     }
+
+    let retries = 0;
+    const MAX_RETRIES = 5;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let intervalTimer: ReturnType<typeof setInterval> | null = null;
+
+    const tryInitialFetch = async () => {
+      setRetrying(false);
+      const ok = await fetchUsage();
+      if (ok) {
+        intervalTimer = setInterval(fetchUsage, 10 * 60 * 1000);
+      } else if (retries < MAX_RETRIES) {
+        retries++;
+        setError(null);
+        setRetrying(true);
+        retryTimer = setTimeout(tryInitialFetch, 3000);
+      }
+    };
+
+    tryInitialFetch();
+
+    return () => {
+      if (retryTimer) clearTimeout(retryTimer);
+      if (intervalTimer) clearInterval(intervalTimer);
+    };
   }, [isRunning, fetchUsage]);
 
   const breakdown = usage?.usageBreakdownList?.[0];
@@ -112,8 +137,15 @@ export function UsageCard({ host, port, apiKey, isRunning }: UsageCardProps) {
       {/* Content */}
       {!isRunning ? (
         <p className="text-xs text-stone-400 font-medium">{t('usageServerOffline')}</p>
-      ) : loading && !usage ? (
-        <Loader2 className="h-4 w-4 animate-spin text-stone-300" />
+      ) : (loading || retrying) && !usage ? (
+        <div className="flex items-center gap-3 flex-1 min-w-0 animate-pulse">
+          <div className="h-5 w-16 rounded-full bg-stone-200 shrink-0" />
+          <div className="flex items-center gap-3 flex-1 min-w-0">
+            <div className="flex-1 h-2 bg-stone-200 rounded-full" />
+            <div className="h-3 w-24 bg-stone-200 rounded shrink-0" />
+            <div className="h-3 w-8 bg-stone-200 rounded shrink-0" />
+          </div>
+        </div>
       ) : error ? (
         <div className="flex items-center gap-1.5">
           <AlertCircle className="h-3.5 w-3.5 text-red-400" />
