@@ -58,7 +58,7 @@ export function CCSwitchImport({ host, port, apiKey }: CCSwitchImportProps) {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
         <span className="text-sm font-semibold text-stone-600">{t('ccSwitchImport')}</span>

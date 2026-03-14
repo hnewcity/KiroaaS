@@ -81,3 +81,22 @@ body,
     text-wrap: balance;
   }
 }
+
+/* Subtle scrollbar styles */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(240 5.9% 80% / 0.5);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(240 5.9% 70% / 0.7);
+}

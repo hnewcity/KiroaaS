@@ -678,14 +678,35 @@ async fn update_tray_language(
     Ok(())
 }
 
+/// Update tray menu credit usage text
+#[tauri::command]
+async fn update_tray_usage(app: AppHandle, text: String) -> Result<(), String> {
+    let tray = app.tray_handle();
+    tray.get_item("credit_usage").set_title(&text).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Update tray menu items based on server running state
+#[tauri::command]
+async fn update_tray_server_state(app: AppHandle, running: bool) -> Result<(), String> {
+    let tray = app.tray_handle();
+    tray.get_item("start_server").set_enabled(!running).map_err(|e| e.to_string())?;
+    tray.get_item("stop_server").set_enabled(running).map_err(|e| e.to_string())?;
+    tray.get_item("restart_server").set_enabled(running).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn main() {
+    let credit_usage_item = CustomMenuItem::new("credit_usage".to_string(), "Credit: --").disabled();
     let start_server_item = CustomMenuItem::new("start_server".to_string(), "启动服务器");
-    let stop_server_item = CustomMenuItem::new("stop_server".to_string(), "停止服务器");
-    let restart_server_item = CustomMenuItem::new("restart_server".to_string(), "重启服务器");
+    let stop_server_item = CustomMenuItem::new("stop_server".to_string(), "停止服务器").disabled();
+    let restart_server_item = CustomMenuItem::new("restart_server".to_string(), "重启服务器").disabled();
     let show = CustomMenuItem::new("show".to_string(), "显示窗口");
     let hide = CustomMenuItem::new("hide".to_string(), "隐藏窗口");
     let quit = CustomMenuItem::new("quit".to_string(), "退出");
     let tray_menu = SystemTrayMenu::new()
+        .add_item(credit_usage_item)
+        .add_native_item(tauri::SystemTrayMenuItem::Separator)
         .add_item(start_server_item)
         .add_item(stop_server_item)
         .add_item(restart_server_item)
@@ -843,6 +864,8 @@ fn main() {
             delete_conversation,
             rename_conversation,
             update_tray_language,
+            update_tray_usage,
+            update_tray_server_state,
         ])
         .on_window_event(|event| {
             #[cfg(target_os = "macos")]

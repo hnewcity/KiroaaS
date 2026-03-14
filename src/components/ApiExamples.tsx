@@ -120,7 +120,7 @@ console.log(message.content[0].text);`,
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col">
       {/* Header with API type toggle */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
@@ -185,8 +185,8 @@ console.log(message.content[0].text);`,
       </div>
 
       {/* Code block */}
-      <div className="flex-1 bg-[#1e1e1e] rounded-xl overflow-hidden min-h-0">
-        <pre className="h-full overflow-auto p-4 text-[11px] leading-relaxed text-stone-300 font-mono">
+      <div className="bg-[#1e1e1e] rounded-xl overflow-hidden min-h-[200px]">
+        <pre className="overflow-auto p-4 text-[11px] leading-relaxed text-stone-300 font-mono">
           <code>{currentCode}</code>
         </pre>
       </div>

@@ -11,7 +11,7 @@ import { useConfig } from './hooks/useConfig';
 import { useI18n } from './hooks/useI18n';
 import { useServerStatus } from './hooks/useServerStatus';
 import { useConversations } from './hooks/useConversations';
-import { startServer, stopServer, getServerLogs, getAppVersion, getDeviceModel } from './lib/tauri';
+import { startServer, stopServer, getServerLogs, getAppVersion, getDeviceModel, updateTrayServerState } from './lib/tauri';
 import { checkVersionUpdate } from './lib/versionCheck';
 import { platform, arch, version } from '@tauri-apps/api/os';
 
@@ -87,6 +87,11 @@ export default function App() {
       setPendingAction(null);
     }
   }, [status.status, pendingAction]);
+
+  // Sync tray menu items with server state
+  useEffect(() => {
+    updateTrayServerState(isRunning).catch(() => {});
+  }, [isRunning]);
 
   // Sync temp config
   useEffect(() => {
@@ -442,7 +447,7 @@ export default function App() {
           <div className={`flex-1 overflow-y-auto overflow-x-hidden z-0 scroll-smooth ${currentView === 'chat' ? 'p-0' : 'p-8 lg:px-10 pt-0'}`}>
 
             {currentView === 'dashboard' && (
-              <div className="flex flex-col h-full gap-4 pb-4">
+              <div className="flex flex-col min-h-full gap-4 pb-4">
 
                 {/* Top Cards Row */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -508,8 +513,18 @@ export default function App() {
 
                 </div>
 
-                {/* API Examples, CC Switch Import, and Usage */}
-                <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-3 gap-4">
+                {/* Usage Card - horizontal bar */}
+                <div className="bg-white rounded-[32px] p-5 shadow-sm">
+                  <UsageCard
+                    host={config.server_host}
+                    port={config.server_port}
+                    apiKey={config.proxy_api_key}
+                    isRunning={isRunning}
+                  />
+                </div>
+
+                {/* API Examples and CC Switch Import */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   {/* API Examples Card */}
                   <div className="bg-white rounded-[32px] p-5 shadow-sm flex flex-col lg:min-h-[280px]">
                     <ApiExamples
@@ -525,16 +540,6 @@ export default function App() {
                       host={config.server_host}
                       port={config.server_port}
                       apiKey={config.proxy_api_key}
-                    />
-                  </div>
-
-                  {/* Usage Card */}
-                  <div className="bg-white rounded-[32px] p-5 shadow-sm flex flex-col lg:min-h-[280px]">
-                    <UsageCard
-                      host={config.server_host}
-                      port={config.server_port}
-                      apiKey={config.proxy_api_key}
-                      isRunning={isRunning}
                     />
                   </div>
                 </div>

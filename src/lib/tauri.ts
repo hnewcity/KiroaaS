@@ -121,3 +121,11 @@ export async function updateTrayLanguage(labels: {
 }): Promise<void> {
   return await invoke('update_tray_language', labels);
 }
+
+export async function updateTrayUsage(text: string): Promise<void> {
+  return await invoke('update_tray_usage', { text });
+}
+
+export async function updateTrayServerState(running: boolean): Promise<void> {
+  return await invoke('update_tray_server_state', { running });
+}
