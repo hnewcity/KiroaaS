@@ -137,7 +137,7 @@ async def get_usage(request: Request):
     headers["Content-Type"] = "application/x-amz-json-1.0"
 
     url = auth_manager.api_host
-    body = {"origin": "AI_EDITOR"}
+    body = {"origin": "AI_EDITOR", "isEmailRequired": True}
 
     try:
         response = await shared_client.post(url, json=body, headers=headers)
@@ -149,6 +149,135 @@ async def get_usage(request: Request):
     except Exception as e:
         logger.error(f"Error fetching usage: {e}", exc_info=True)
         raise HTTPException(status_code=502, detail=f"Failed to fetch usage: {str(e)}")
+
+
+@router.get("/account", dependencies=[Depends(verify_api_key)])
+async def get_account(request: Request):
+    """
+    Query Kiro account profile by calling the usage endpoint internally.
+
+    Returns account name, email, subscription plan, quota information,
+    trial plan details, and expiration dates.
+    """
+    logger.info("Request to /account")
+
+    auth_manager: KiroAuthManager = request.app.state.auth_manager
+    shared_client = request.app.state.http_client
+
+    try:
+        token = await auth_manager.get_access_token()
+        headers = get_kiro_headers(auth_manager, token)
+        headers["x-amz-target"] = "com.amazon.aws.codewhisperer.runtime.AmazonCodeWhispererService.GetUsageLimits"
+        headers["Content-Type"] = "application/x-amz-json-1.0"
+
+        url = auth_manager.api_host
+        body = {"origin": "AI_EDITOR", "isEmailRequired": True}
+
+        logger.debug(f"Calling Kiro API with headers: {headers}")
+        response = await shared_client.post(url, json=body, headers=headers)
+
+        logger.debug(f"Kiro API response status: {response.status_code}")
+
+        if response.status_code != 200:
+            error_text = response.text
+            logger.error(f"Kiro API error: {response.status_code} - {error_text}")
+            raise HTTPException(status_code=response.status_code, detail=error_text)
+
+        usage_data = response.json()
+
+        # Extract account info from usage data
+        user_info = usage_data.get("userInfo", {})
+        subscription_info = usage_data.get("subscriptionInfo", {})
+        usage_list = usage_data.get("usageBreakdownList", [])
+
+        # Log full response for debugging
+        logger.info(f"Full API response: {json.dumps(usage_data, indent=2)}")
+
+        # Extract primary usage info (usually index 0 - covered in plan)
+        usage_info = usage_list[0] if usage_list else {}
+
+        # Extract trial status from freeTrialInfo (not subscriptionInfo)
+        free_trial_info = usage_info.get("freeTrialInfo", {})
+        is_trial = free_trial_info.get("freeTrialStatus") == "ACTIVE"
+
+        # Extract trial expiry date (Unix timestamp)
+        trial_expiry_ts = free_trial_info.get("freeTrialExpiry")
+        trial_expiry = None
+        if trial_expiry_ts:
+            from datetime import datetime
+            trial_expiry = datetime.fromtimestamp(trial_expiry_ts).strftime("%Y-%m-%d")
+
+        subscription_expiry = subscription_info.get("expiryDate") or subscription_info.get("subscriptionExpiryDate")
+
+        # Determine account status
+        account_status = "Trial" if is_trial else "Active"
+        if subscription_info.get("status"):
+            account_status = subscription_info.get("status")
+
+        # Extract bonus credits from breakdown.bonuses array (like kiro-account-manager)
+        bonuses = usage_info.get("bonuses", [])
+        active_bonuses = [b for b in bonuses if b.get("status") == "ACTIVE"]
+        bonus_quota = sum(b.get("usageLimitWithPrecision", b.get("usageLimit", 0)) for b in active_bonuses) if active_bonuses else None
+        bonus_usage = sum(b.get("currentUsageWithPrecision", b.get("currentUsage", 0)) for b in active_bonuses) if active_bonuses else None
+        bonus_remaining = (bonus_quota - bonus_usage) if bonus_quota and bonus_usage else None
+
+        # Extract quota info - use trial quota if active, otherwise use plan quota
+        if is_trial:
+            total_quota = free_trial_info.get("usageLimitWithPrecision") or free_trial_info.get("usageLimit")
+            current_usage = free_trial_info.get("currentUsageWithPrecision") or free_trial_info.get("currentUsage")
+        else:
+            total_quota = usage_info.get("usageLimitWithPrecision") or usage_info.get("usageLimit")
+            current_usage = usage_info.get("currentUsageWithPrecision") or usage_info.get("currentUsage")
+
+        # Extract quota info - trial + free
+        trial_quota = free_trial_info.get("usageLimitWithPrecision") or free_trial_info.get("usageLimit") or 0
+        trial_usage = free_trial_info.get("currentUsageWithPrecision") or free_trial_info.get("currentUsage") or 0
+
+        free_quota = usage_info.get("usageLimitWithPrecision") or usage_info.get("usageLimit") or 0
+        free_usage = usage_info.get("currentUsageWithPrecision") or usage_info.get("currentUsage") or 0
+
+        # Total = trial + free
+        total_quota = trial_quota + free_quota
+        total_usage = trial_usage + free_usage
+
+        # Calculate remaining quota and percentage
+        remaining_quota = (total_quota - total_usage) if total_quota and total_usage else None
+        usage_percentage = round((total_usage / total_quota) * 100, 2) if total_quota and total_usage else 0
+
+        # Build account response
+        account_data = {
+            "accountName": user_info.get("email") or "User",
+            "email": user_info.get("email"),
+            "provider": user_info.get("provider"),
+            "planType": subscription_info.get("type", "Free"),
+            "subscriptionTitle": subscription_info.get("subscriptionTitle"),
+            "isTrial": is_trial,
+            "trialExpiryDate": trial_expiry,
+            "subscriptionExpiryDate": subscription_expiry,
+            "totalQuota": total_quota,
+            "currentUsage": total_usage,
+            "remainingQuota": remaining_quota,
+            "usagePercentage": usage_percentage,
+            "trialQuota": trial_quota,
+            "trialUsage": trial_usage,
+            "freeQuota": free_quota,
+            "freeUsage": free_usage,
+            "bonusQuota": bonus_quota,
+            "bonusUsage": bonus_usage,
+            "bonusRemaining": (bonus_quota - bonus_usage) if bonus_quota and bonus_usage else None,
+            "accountStatus": account_status,
+            "resetDate": usage_info.get("resetDate"),
+            "overageEnabled": usage_info.get("overageEnabled", False),
+        }
+
+        logger.info(f"Account retrieved: {account_data.get('email')} (trial={is_trial}, quota={total_quota}, bonus={bonus_quota})")
+        return JSONResponse(content=account_data)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching account: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Failed to fetch account: {str(e)}")
 
 
 @router.get("/v1/models", response_model=ModelList, dependencies=[Depends(verify_api_key)])

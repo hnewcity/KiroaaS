@@ -20,6 +20,14 @@ interface UsageBreakdown {
   overageRate?: number;
   currentOverages?: number;
   resourceType?: string;
+  freeTrialInfo?: {
+    usageLimit?: number;
+    usageLimitWithPrecision?: number;
+    currentUsage?: number;
+    currentUsageWithPrecision?: number;
+    freeTrialStatus?: string;
+    freeTrialExpiry?: number;
+  };
 }
 
 interface UsageData {
@@ -54,14 +62,7 @@ export function UsageCard({ host, port, apiKey, isRunning }: UsageCardProps) {
       const data: UsageData = await res.json();
       setUsage(data);
       cachedUsage = data;
-      // Sync tray menu
-      const bd = data.usageBreakdownList?.[0];
-      const lim = bd?.usageLimitWithPrecision ?? bd?.usageLimit ?? 0;
-      const cur = bd?.currentUsageWithPrecision ?? bd?.currentUsage ?? 0;
-      if (lim > 0) {
-        const p = Math.min(100, Math.round((cur / lim) * 100));
-        updateTrayUsage(`Credit: ${cur.toLocaleString()} / ${lim.toLocaleString()} (${p}%)`).catch(() => {});
-      }
+      // Sync tray menu with total credits (will be calculated below)
       return true;
     } catch (e) {
       // Only show error if there's no existing data to display
@@ -109,9 +110,26 @@ export function UsageCard({ host, port, apiKey, isRunning }: UsageCardProps) {
   }, [isRunning, fetchUsage]);
 
   const breakdown = usage?.usageBreakdownList?.[0];
-  const limit = breakdown?.usageLimitWithPrecision ?? breakdown?.usageLimit ?? 0;
-  const used = breakdown?.currentUsageWithPrecision ?? breakdown?.currentUsage ?? 0;
-  const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+  const bonusBreakdown = usage?.usageBreakdownList?.[1];
+  const freeTrialInfo = breakdown?.freeTrialInfo;
+
+  // Trial credits
+  const trialLimit = freeTrialInfo?.usageLimitWithPrecision ?? freeTrialInfo?.usageLimit ?? 0;
+  const trialUsed = freeTrialInfo?.currentUsageWithPrecision ?? freeTrialInfo?.currentUsage ?? 0;
+
+  // Free credits
+  const freeLimit = breakdown?.usageLimitWithPrecision ?? breakdown?.usageLimit ?? 0;
+  const freeUsed = breakdown?.currentUsageWithPrecision ?? breakdown?.currentUsage ?? 0;
+
+  // Bonus credits
+  const bonusLimit = bonusBreakdown?.usageLimitWithPrecision ?? bonusBreakdown?.usageLimit ?? 0;
+  const bonusUsed = bonusBreakdown?.currentUsageWithPrecision ?? bonusBreakdown?.currentUsage ?? 0;
+
+  // Total credits (trial + free + bonus)
+  const totalLimit = trialLimit + freeLimit + bonusLimit;
+  const totalUsed = trialUsed + freeUsed + bonusUsed;
+  const pct = totalLimit > 0 ? Math.min(100, Math.round((totalUsed / totalLimit) * 100)) : 0;
+
   const plan = usage?.subscriptionInfo?.subscriptionTitle;
   const resetDate = usage?.nextDateReset
     ? new Date(usage.nextDateReset * 1000).toLocaleDateString()
@@ -170,7 +188,7 @@ export function UsageCard({ host, port, apiKey, isRunning }: UsageCardProps) {
           )}
 
           {/* Usage bar */}
-          {limit > 0 && (
+          {totalLimit > 0 && (
             <div className="flex items-center gap-3 flex-1 min-w-0">
               <div className="flex-1 min-w-0">
                 <div className="h-2 bg-stone-200 rounded-full overflow-hidden">
@@ -183,7 +201,7 @@ export function UsageCard({ host, port, apiKey, isRunning }: UsageCardProps) {
                 </div>
               </div>
               <span className="text-xs font-bold text-[#111] shrink-0">
-                {fmtNum(used)} <span className="text-stone-400 font-normal">/ {fmtNum(limit)}</span>
+                {fmtNum(totalUsed)} <span className="text-stone-400 font-normal">/ {fmtNum(totalLimit)}</span>
               </span>
               <span className="text-[10px] text-stone-400 shrink-0">{pct}%</span>
             </div>

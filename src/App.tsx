@@ -7,6 +7,7 @@ import { ApiExamples } from './components/ApiExamples';
 import { CCSwitchImport } from './components/CCSwitchImport';
 import { UsageCard } from './components/UsageCard';
 import { ChatView } from './components/ChatView';
+import { AccountView } from './components/AccountView';
 import { useConfig } from './hooks/useConfig';
 import { useI18n } from './hooks/useI18n';
 import { useServerStatus } from './hooks/useServerStatus';
@@ -34,9 +35,10 @@ import {
   AlertTriangle,
   CheckCircle,
   X,
+  User,
 } from 'lucide-react';
 
-type View = 'dashboard' | 'settings' | 'logs' | 'chat';
+type View = 'dashboard' | 'settings' | 'logs' | 'chat' | 'account';
 
 export default function App() {
   const { config, saveConfig, isLoading: isConfigLoading, error: configError } = useConfig();
@@ -90,7 +92,7 @@ export default function App() {
 
   // Sync tray menu items with server state
   useEffect(() => {
-    updateTrayServerState(isRunning).catch(() => { });
+    updateTrayServerState(isRunning).catch(() => {});
   }, [isRunning]);
 
   // Sync temp config
@@ -108,15 +110,15 @@ export default function App() {
       .then(([v, p, a, o, d]) => {
         cachedInfo = { currentVersion: v, platform: p, arch: a, osVersion: o, deviceModel: d };
       })
-      .catch(() => { });
+      .catch(() => {});
 
     // 1. App start
-    checkVersionUpdate(config, 'app_start').catch(() => { });
+    checkVersionUpdate(config, 'app_start').catch(() => {});
 
     // 3. Scheduled every 6 hours
     const SIX_HOURS = 6 * 60 * 60 * 1000;
     const interval = setInterval(() => {
-      checkVersionUpdate(config, 'scheduled').catch(() => { });
+      checkVersionUpdate(config, 'scheduled').catch(() => {});
     }, SIX_HOURS);
 
     // 2. App close (beforeunload)
@@ -284,6 +286,13 @@ export default function App() {
                 label={t('dashboard') || "Dashboard"}
               />
               <NavButton
+                active={currentView === 'account'}
+                onClick={() => setCurrentView('account')}
+                icon={User}
+                label={t('tabAccount')}
+                badge={isRunning}
+              />
+              <NavButton
                 active={currentView === 'chat'}
                 onClick={() => setCurrentView('chat')}
                 icon={MessageCircle}
@@ -328,6 +337,7 @@ export default function App() {
                 <div className="flex items-center gap-3 mb-1">
                   <h1 className="text-2xl font-bold text-[#111] tracking-tight">
                     {currentView === 'dashboard' && t('dashboard')}
+                    {currentView === 'account' && t('tabAccount')}
                     {currentView === 'settings' && t('tabSettings')}
                     {currentView === 'logs' && t('systemLogs')}
                   </h1>
@@ -337,6 +347,7 @@ export default function App() {
                 </div>
                 <p className="text-stone-500 font-medium">
                   {currentView === 'dashboard' && t('dashboardDesc')}
+                  {currentView === 'account' && t('accountDesc')}
                   {currentView === 'settings' && t('settingsDesc')}
                   {currentView === 'logs' && t('logsDesc')}
                 </p>
@@ -346,38 +357,38 @@ export default function App() {
                 {/* Main Action Button */}
                 {currentView === 'dashboard' && (
                   <>
-                    <Button
-                      className={`h-12 rounded-full px-6 font-semibold shadow-lg transition-all duration-300 ${isRunning
-                        ? 'bg-black text-white hover:bg-stone-800'
-                        : 'bg-black text-white hover:bg-stone-800'
-                        }`}
-                      onClick={isRunning ? handleStop : handleStart}
-                      disabled={isProcessing || (!isRunning && !config.proxy_api_key)}
-                    >
-                      {isStarting || isStopping ? (
-                        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                      ) : isRunning ? (
-                        <Square className="mr-2 h-5 w-5 fill-current" />
-                      ) : (
-                        <Play className="mr-2 h-5 w-5 fill-current" />
-                      )}
-                      {isRunning ? (isStopping ? t('stopping') : t('stopServer')) : (isStarting ? t('starting') : t('startServer'))}
-                    </Button>
-                    {isRunning && (
-                      <Button
-                        variant="outline"
-                        className="h-12 rounded-full px-6 font-semibold border-stone-300 hover:bg-stone-100 transition-all duration-300"
-                        onClick={handleRestartServer}
-                        disabled={isProcessing}
-                      >
-                        {isRestarting ? (
-                          <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                        ) : (
-                          <RotateCw className="mr-2 h-5 w-5" />
-                        )}
-                        {isRestarting ? t('starting') : t('restartServer')}
-                      </Button>
+                  <Button
+                    className={`h-12 rounded-full px-6 font-semibold shadow-lg transition-all duration-300 ${isRunning
+                      ? 'bg-black text-white hover:bg-stone-800'
+                      : 'bg-black text-white hover:bg-stone-800'
+                      }`}
+                    onClick={isRunning ? handleStop : handleStart}
+                    disabled={isProcessing || (!isRunning && !config.proxy_api_key)}
+                  >
+                    {isStarting || isStopping ? (
+                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                    ) : isRunning ? (
+                      <Square className="mr-2 h-5 w-5 fill-current" />
+                    ) : (
+                      <Play className="mr-2 h-5 w-5 fill-current" />
                     )}
+                    {isRunning ? (isStopping ? t('stopping') : t('stopServer')) : (isStarting ? t('starting') : t('startServer'))}
+                  </Button>
+                  {isRunning && (
+                    <Button
+                      variant="outline"
+                      className="h-12 rounded-full px-6 font-semibold border-stone-300 hover:bg-stone-100 transition-all duration-300"
+                      onClick={handleRestartServer}
+                      disabled={isProcessing}
+                    >
+                      {isRestarting ? (
+                        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                      ) : (
+                        <RotateCw className="mr-2 h-5 w-5" />
+                      )}
+                      {isRestarting ? t('starting') : t('restartServer')}
+                    </Button>
+                  )}
                   </>
                 )}
 
@@ -582,6 +593,17 @@ export default function App() {
                     <LogViewer logs={logs} onLogsCleared={() => setLogs([])} />
                   </div>
                 </div>
+              </div>
+            )}
+
+            {currentView === 'account' && (
+              <div className="h-full pb-4">
+                <AccountView
+                  host={config.server_host}
+                  port={config.server_port}
+                  apiKey={config.proxy_api_key}
+                  isRunning={isRunning}
+                />
               </div>
             )}
 
