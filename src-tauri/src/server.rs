@@ -389,7 +389,14 @@ impl ServerManager {
         #[cfg(debug_assertions)]
         {
             // Development: use python from system
-            Ok("python3".to_string())
+            #[cfg(windows)]
+            {
+                Ok("python".to_string())
+            }
+            #[cfg(not(windows))]
+            {
+                Ok("python3".to_string())
+            }
         }
 
         #[cfg(not(debug_assertions))]
