@@ -8,6 +8,22 @@ body,
   height: 100%;
 }
 
+/* macOS WKWebView rubber-bands the whole page (and every nested scroller) on
+   two-finger trackpad scrolls, so the app window "bounces" like a web page.
+   The layout never scrolls at the page level, so lock html/body and stop
+   overscroll on inner scroll containers too. */
+html,
+body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+*,
+*::before,
+*::after {
+  overscroll-behavior: none;
+}
+
 @layer base {
   :root {
     --background: 0 0% 100%;
