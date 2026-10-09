@@ -21,6 +21,13 @@ if _HERE not in sys.path:
 import uvicorn
 from loguru import logger
 
+# Default the kiro-gateway fork's tuned settings (first-token / streaming
+# timeouts, retries, web_search injection) BEFORE anything imports kiro:
+# kiro/config.py reads them at import time. Explicit env / .env values win.
+from extensions.upstream_defaults import apply_upstream_defaults
+
+apply_upstream_defaults()
+
 # Widen AnthropicMessage.role BEFORE importing main. FastAPI compiles and
 # caches each route's body validator when the @router.post decorators run,
 # which happens while `from main import app` imports the route modules. If we
@@ -60,6 +67,10 @@ from extensions.control_plane_host import install_control_plane_host_redirect
 from extensions.chat_host_fallback import install_chat_host_fallback
 from extensions.model_id_format import install_model_id_format
 from extensions.billing_header_strip import install_billing_header_strip
+from extensions.kiro_stream_decoder import install_kiro_stream_decoder
+from extensions.kiro_payload_builder import install_kiro_payload_builder
+from extensions.upstream_retry import install_upstream_retry
+from extensions.client_compat import install_client_compat
 
 
 # Mount extension routers on the upstream app. (tool-name aliasing and
@@ -74,6 +85,15 @@ install_chat_host_fallback()
 # prompt before forwarding to Kiro, so it doesn't poison upstream prompt-cache
 # prefixes. Wraps extract_system_prompt() at runtime (order-insensitive).
 install_billing_header_strip()
+# Ports of the kiro-gateway fork's upstream hardening (61d9b68 / dc0fe43).
+# Order matters: the payload builder calls tool_name_alias's wrappers through
+# kiro.converters_core, the stream decoder wraps whatever parse_kiro_stream is
+# installed (the aliasing one), and client_compat wraps the payload builder's
+# route-level anthropic_to_kiro. All of them go after tool-name aliasing.
+install_kiro_stream_decoder()
+install_kiro_payload_builder()
+install_upstream_retry()
+install_client_compat(app)
 # Dash-format Claude model IDs on /v1/models for Claude-family clients. Added as
 # a response middleware (Starlette builds the stack lazily at startup, so adding
 # it post-import still takes effect) rather than wrapping the already-registered
