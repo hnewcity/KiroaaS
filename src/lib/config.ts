@@ -35,6 +35,7 @@ export interface AppConfig {
   auto_launch: boolean;
   auto_start_server: boolean;
   auto_repair: boolean;
+  hide_cloud_page: boolean;
 
   // Client identity
   client_id?: string;
@@ -59,6 +60,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   auto_launch: false,
   auto_start_server: false,
   auto_repair: true,
+  hide_cloud_page: false,
   cloud_enabled: false,
 };
 

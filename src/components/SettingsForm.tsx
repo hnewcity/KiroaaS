@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText, Network, Wifi, AlertTriangle, Brain, Box, Power, Wrench } from 'lucide-react';
+import { CheckCircle, Sparkles, X, Shuffle, Save, Shield, Key, Database, FileText, Network, Wifi, AlertTriangle, Brain, Box, Power, Wrench, EyeOff, Settings } from 'lucide-react';
 import { Loader2 } from 'lucide-react';
 
 export type SettingsHintKey = 'auth_cli_db' | 'auth_creds_file' | 'auth_refresh_token' | 'proxy_api_key' | 'generate' | 'check_update' | 'save' | null;
@@ -19,7 +19,7 @@ export interface SettingsFormStatus {
     success: boolean;
     showRestartPrompt: boolean;
     isRestarting: boolean;
-    hasChanges: boolean;
+    requiresRestart: boolean;
 }
 
 export interface SettingsFormHandle {
@@ -64,6 +64,10 @@ export const SettingsForm = forwardRef<SettingsFormHandle, SettingsFormProps>(fu
     const [repairError, setRepairError] = useState<string | null>(null);
     const [pendingOccupier, setPendingOccupier] = useState<PendingPortOccupier | null>(null);
 
+    const requiresRestart = Object.entries(formData).some(
+        ([key, value]) => key !== 'hide_cloud_page' && value !== config[key as keyof AppConfig]
+    );
+
     // Update check state
     const [appVersion, setAppVersion] = useState('');
     const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
@@ -89,9 +93,9 @@ export const SettingsForm = forwardRef<SettingsFormHandle, SettingsFormProps>(fu
             success,
             showRestartPrompt,
             isRestarting,
-            hasChanges: JSON.stringify(formData) !== JSON.stringify(config),
+            requiresRestart,
         });
-    }, [isSaving, error, success, showRestartPrompt, isRestarting, formData, config]);
+    }, [isSaving, error, success, showRestartPrompt, isRestarting, requiresRestart]);
 
     // Auto-scan on mount (for displaying detected path chips)
     useEffect(() => {
@@ -115,8 +119,8 @@ export const SettingsForm = forwardRef<SettingsFormHandle, SettingsFormProps>(fu
         try {
             await onSave(formData);
             setSuccess(true);
-            // If server is running, show restart prompt
-            if (isRunning && onRestart) {
+            // Display preferences take effect without restarting the server.
+            if (isRunning && onRestart && requiresRestart) {
                 setShowRestartPrompt(true);
             } else {
                 setTimeout(() => setSuccess(false), 3000);
@@ -544,15 +548,15 @@ export const SettingsForm = forwardRef<SettingsFormHandle, SettingsFormProps>(fu
                 </div>
             </div>
 
-            {/* System — Auto-launch */}
+            {/* System Settings */}
             <div className="space-y-6 pt-4">
                 <div className="flex items-center gap-3 pb-2 border-b border-stone-100">
                     <div className="h-10 w-10 rounded-full bg-stone-100 flex items-center justify-center">
-                        <Power className="h-5 w-5 text-stone-600" />
+                        <Settings className="h-5 w-5 text-stone-600" />
                     </div>
                     <div>
-                        <h3 className="text-lg font-bold text-[#111]">{t('autoLaunch')}</h3>
-                        <p className="text-sm text-stone-500">{t('autoLaunchDesc')}</p>
+                        <h3 className="text-lg font-bold text-[#111]">{t('systemSettings')}</h3>
+                        <p className="text-sm text-stone-500">{t('systemSettingsDesc')}</p>
                     </div>
                 </div>
                 <div className="bg-[#F8F8F8] p-6 rounded-[24px]">
@@ -580,6 +584,21 @@ export const SettingsForm = forwardRef<SettingsFormHandle, SettingsFormProps>(fu
                         <Switch
                             checked={formData.auto_start_server}
                             onCheckedChange={(checked) => updateField('auto_start_server', checked)}
+                        />
+                    </div>
+                    <div className="mt-6 flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-3">
+                            <EyeOff className="h-5 w-5 text-stone-400 shrink-0" />
+                            <div>
+                                <Label htmlFor="hide-cloud-page" className="text-sm font-semibold text-[#111]">{t('hideCloudPage')}</Label>
+                                <p id="hide-cloud-page-description" className="text-xs text-stone-500 mt-0.5">{t('hideCloudPageDesc')}</p>
+                            </div>
+                        </div>
+                        <Switch
+                            id="hide-cloud-page"
+                            aria-describedby="hide-cloud-page-description"
+                            checked={formData.hide_cloud_page}
+                            onCheckedChange={(checked) => updateField('hide_cloud_page', checked)}
                         />
                     </div>
                 </div>
@@ -858,7 +877,7 @@ export const SettingsForm = forwardRef<SettingsFormHandle, SettingsFormProps>(fu
             {/* Action Bar */}
             {!hideActionBar && (
             <div className="rounded-xl pt-6 flex justify-end gap-4">
-                {JSON.stringify(formData) !== JSON.stringify(config) && isRunning && !showRestartPrompt && (
+                {requiresRestart && isRunning && !showRestartPrompt && (
                     <div className="flex items-center text-amber-700 bg-amber-50 px-4 py-2 rounded-full text-sm font-medium animate-in fade-in">
                         <AlertTriangle className="w-4 h-4 mr-2" />
                         {t('configChangeHint')}

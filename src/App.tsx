@@ -108,6 +108,12 @@ export default function App() {
     setTempConfig(config);
   }, [config]);
 
+  useEffect(() => {
+    if (config.hide_cloud_page && currentView === 'cloud') {
+      setCurrentView('dashboard');
+    }
+  }, [config.hide_cloud_page, currentView]);
+
   // Auto version check: on app start + every 6 hours
   useEffect(() => {
     if (isConfigLoading) return;
@@ -483,13 +489,15 @@ export default function App() {
                 icon={LayoutDashboard}
                 label={t('dashboard') || "Dashboard"}
               />
-              <NavButton
-                active={currentView === 'cloud'}
-                onClick={() => setCurrentView('cloud')}
-                icon={Cloud}
-                label="KiroaaS Cloud"
-                badgeLabel="Beta"
-              />
+              {!config.hide_cloud_page && (
+                <NavButton
+                  active={currentView === 'cloud'}
+                  onClick={() => setCurrentView('cloud')}
+                  icon={Cloud}
+                  label="KiroaaS Cloud"
+                  badgeLabel="Beta"
+                />
+              )}
               <NavButton
                 active={currentView === 'chat'}
                 onClick={() => setCurrentView('chat')}
@@ -612,7 +620,7 @@ export default function App() {
                 {/* Settings Save Button in Header */}
                 {currentView === 'settings' && (
                   <div className="flex items-center gap-3">
-                    {settingsStatus?.hasChanges && isRunning && !settingsStatus.showRestartPrompt && (
+                    {settingsStatus?.requiresRestart && isRunning && !settingsStatus.showRestartPrompt && (
                       <div className="flex items-center text-amber-700 bg-amber-50 px-3 py-1.5 rounded-full text-xs font-medium animate-in fade-in">
                         <AlertTriangle className="w-3.5 h-3.5 mr-1.5" />
                         {t('configChangeHint')}
@@ -838,7 +846,7 @@ export default function App() {
               </div>
             )}
 
-            {currentView === 'cloud' && (
+            {currentView === 'cloud' && !config.hide_cloud_page && (
               <CloudView
                 enabled={config.cloud_enabled}
                 onEnabledChange={async (enabled) => {

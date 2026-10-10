@@ -45,6 +45,8 @@ pub struct AppConfig {
     pub auto_start_server: bool,
     #[serde(default = "default_auto_repair")]
     pub auto_repair: bool,
+    #[serde(default)]
+    pub hide_cloud_page: bool,
 
     // Client identity
     #[serde(default)]
@@ -81,6 +83,7 @@ impl Default for AppConfig {
             auto_launch: false,
             auto_start_server: false,
             auto_repair: true,
+            hide_cloud_page: false,
             client_id: None,
             cloud_enabled: false,
         }
