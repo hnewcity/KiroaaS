@@ -44,12 +44,15 @@ Write-Host "Prerequisites OK"
 # Install Node dependencies
 Write-Host "Installing Node dependencies..."
 npm install
+if ($LASTEXITCODE -ne 0) { throw "Node dependency installation failed" }
 
 # Install Python dependencies
 Write-Host "Installing Python dependencies..."
 Push-Location python-backend
 & $PipExe install -r requirements.txt
+if ($LASTEXITCODE -ne 0) { throw "Python dependency installation failed" }
 & $PipExe install pyinstaller
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller installation failed" }
 Pop-Location
 
 # Build Python backend
@@ -71,18 +74,22 @@ if (Test-Path src-tauri/resources/kiro-gateway) {
 New-Item -ItemType Directory -Force -Path src-tauri/resources | Out-Null
 Push-Location python-backend/build/dist
 tar czf ../../../src-tauri/resources/kiro-gateway.tar.gz kiro-gateway
+if ($LASTEXITCODE -ne 0) { throw "Python backend archive creation failed" }
 Pop-Location
 
 # Build Tauri app
 Write-Host "Building Windows app..."
 $keyPath = "$env:USERPROFILE\.tauri\kiroaas.key"
+$tauriBuildArgs = @("run", "tauri:build")
 if (Test-Path $keyPath) {
     $env:TAURI_PRIVATE_KEY = Get-Content $keyPath -Raw
     $env:TAURI_KEY_PASSWORD = ""
-} else {
-    Write-Host "Warning: Signing key not found at $keyPath, building without updater signing"
+} elseif (-not $env:TAURI_PRIVATE_KEY) {
+    Write-Host "Warning: No updater signing key found; building MSI and NSIS installers only"
+    $tauriBuildArgs += @("--", "--bundles", "msi,nsis")
 }
-npm run tauri:build
+npm @tauriBuildArgs
+if ($LASTEXITCODE -ne 0) { throw "Windows app build failed" }
 
 Write-Host ""
 Write-Host "=== Build Complete ==="

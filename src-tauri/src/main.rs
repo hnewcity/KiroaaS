@@ -6,6 +6,8 @@ mod config;
 mod conversations;
 mod server;
 mod cloud_auth;
+#[cfg(windows)]
+mod windows_titlebar;
 
 use auto_launch::AutoLaunch;
 use config::{AppConfig, load_config, save_config};
@@ -818,6 +820,13 @@ fn main() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             macos_dock::setup_dock_click_handler(app.handle());
+
+            #[cfg(windows)]
+            if let Some(window) = app.get_window("main") {
+                if let Err(error) = windows_titlebar::apply(&window) {
+                    eprintln!("[Window] Could not apply title bar colors: {error}");
+                }
+            }
 
             let app_handle = app.handle();
             tauri::async_runtime::spawn(async move {

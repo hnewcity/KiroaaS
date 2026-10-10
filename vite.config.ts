@@ -12,8 +12,12 @@ export default defineConfig({
   },
   // Tauri expects a fixed port in development
   server: {
+    host: '127.0.0.1',
     port: 5173,
     strictPort: true,
+    watch: {
+      ignored: ['**/src-tauri/**', '**/python-backend/**'],
+    },
   },
   // Tauri uses a different build target
   build: {
