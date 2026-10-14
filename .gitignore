@@ -262,6 +262,9 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# Backend runtime state (account rotation, circuit breaker, model cache)
+state.json
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
