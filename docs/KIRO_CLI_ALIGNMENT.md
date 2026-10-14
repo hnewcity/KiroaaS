@@ -59,7 +59,7 @@ bug fixes, not a return to silent argument changes or data loss.
 ## Implementation/evidence matrix
 
 | Requirement | Implementation | Offline evidence |
-|---|---|---|
+| --- | --- | --- |
 | Error-aware recovery and one coordinated refresh | `extensions/retry_policy.py`, `upstream_retry.py` | retry-policy, upstream-retry and auth tests |
 | Closed abandoned/cancelled streams, stable request ID and real attempts | retry transport + shared parser | retry/stream/native-flow regressions |
 | Kiro millisecond and HTTP-date hints; no assumed independent 429 buckets | retry policy | hint parsing, exhausted status and no-rotation tests |
@@ -121,7 +121,7 @@ This compatibility mapping is schema-backed, not something source `luo` emits.
 ## Configuration and behavior
 
 | Setting | Default | Behavior |
-|---|---|---|
+| --- | --- | --- |
 | KIRO_PROTOCOL_PROFILE | legacy | legacy or cli operation contracts |
 | KIRO_GENERATION_PROTOCOL | generate | generate or explicit experimental responses |
 | KIRO_NATIVE_SYSTEM_PROMPT | false | Native system field, no duplicate prefix |
@@ -205,12 +205,13 @@ import the real-account manual_api_test.py. UTF-8 reads are explicit for the Win
 credential-migration fixture.
 
 Recorded checkpoints:
+
 - Initial read-only audit: 173 extension tests, which missed the observed defects.
 - First implementation pass: 2259 tests and 209 subtests.
 - Native/protocol-component pass: 3404 tests and 213 subtests.
 - Integrated routing pass: 3591 tests and 213 subtests; only the existing dependency
   deprecation warning, with RuntimeWarning/unawaited-coroutine warnings treated as errors.
-- `cargo check --offline`: successful for kiroaas 1.2.2.
+- `cargo check --offline`: successful for kiroaas 1.3.0.
 - PyInstaller backend build and read-only `--help` smoke: successful in an owned
   verification directory; final rebuild after the last source changes is recorded
   separately below. No installed app or release archive was overwritten.
@@ -257,7 +258,6 @@ consecutive goal turn with the same remaining external gate. Local verification
 has advanced, but the full goal still cannot be marked complete. No live Kiro
 request, credential discovery, or deployment was performed.
 
-
 ## Historical blocked audit — 2026-10-14 (authorization since resolved)
 
 The live-acceptance authorization gate remains unchanged for a third consecutive
@@ -270,7 +270,6 @@ No additional local implementation work is outstanding in the accepted scope.
 At that checkpoint, automatic continuation was not human authorization for billable
 requests and the goal was marked blocked. The user subsequently provided explicit
 authorization; this historical gate is resolved.
-
 
 ## Authorized live acceptance — 2026-10-14
 
@@ -287,7 +286,7 @@ shell command. Each inference probe used a one-send transport budget, with bound
 elapsed time and no implicit control/parameter fallback.
 
 | Check | Observed result |
-|---|---|
+| --- | --- |
 | CLI management ListAvailableModels | HTTP 200; 9 models, none advertising additionalModelRequestFieldsSchema |
 | CLI management GetUsageLimits | HTTP 200 |
 | CLI Generate without native systemPrompt | HTTP 200, exact OK; native eventstream decoded |
@@ -340,7 +339,6 @@ Sanitized per-probe evidence is under the owned verification build directory:
 `live-tool-and-limit-results.json`, `live-postfix-results.json`, and
 `live-final-limit-results.json`. Pre-fix error
 records are intentionally retained as historical evidence, not current behavior.
-
 
 ## Post-live-fix verification — 2026-10-14
 
