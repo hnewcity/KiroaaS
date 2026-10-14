@@ -53,9 +53,9 @@ def _mock_async_client(status_code=200, json_data=None, raises=None):
 
     mock_client = AsyncMock()
     if raises is not None:
-        mock_client.post = AsyncMock(side_effect=raises)
+        mock_client.request = AsyncMock(side_effect=raises)
     else:
-        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client.request = AsyncMock(return_value=mock_response)
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
@@ -63,7 +63,7 @@ def _mock_async_client(status_code=200, json_data=None, raises=None):
         "extensions.profile_arn_autofetch.httpx.AsyncClient",
         return_value=mock_client,
     )
-    return patcher, mock_client.post
+    return patcher, mock_client.request
 
 
 _PROFILES_OK = {"profiles": [{"arn": "arn:aws:codewhisperer:us-east-1:1:profile/p", "profileName": "p"}]}
@@ -137,7 +137,7 @@ async def test_uses_sso_region_for_endpoint():
     with patcher:
         await manager.get_access_token()
 
-    url = post.call_args.args[0]
+    url = post.call_args.args[1]
     assert url == "https://q.eu-west-1.amazonaws.com/"
     assert "kiro.dev" not in url
 
@@ -150,7 +150,7 @@ async def test_falls_back_to_region_when_no_sso_region():
     with patcher:
         await manager.get_access_token()
 
-    assert post.call_args.args[0] == "https://q.ap-southeast-2.amazonaws.com/"
+    assert post.call_args.args[1] == "https://q.ap-southeast-2.amazonaws.com/"
 
 
 @pytest.mark.asyncio
@@ -162,12 +162,12 @@ async def test_request_headers_and_body():
         await manager.get_access_token()
 
     headers = post.call_args.kwargs["headers"]
-    body = post.call_args.kwargs["content"]
+    body = post.call_args.kwargs["json"]
     assert headers["Authorization"] == "Bearer valid-token"
-    assert headers["X-Amz-Target"] == "AmazonCodeWhispererService.ListAvailableProfiles"
-    assert headers["Content-Encoding"] == "amz-1.0"
-    assert manager.fingerprint in headers["User-Agent"]
-    assert json.loads(body) == {"nextToken": None}
+    assert headers["x-amz-target"] == "AmazonCodeWhispererService.ListAvailableProfiles"
+    assert headers["Content-Type"] == "application/x-amz-json-1.0"
+    assert headers["User-Agent"].startswith("KiroaaS/")
+    assert body == {"nextToken": None}
 
 
 @pytest.mark.asyncio

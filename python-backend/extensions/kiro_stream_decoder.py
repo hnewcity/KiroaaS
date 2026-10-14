@@ -31,6 +31,7 @@ an "exception" event, so no upstream code has to understand the new type.
 """
 
 import codecs
+import httpx
 import dataclasses
 import json
 import struct
@@ -41,6 +42,7 @@ from loguru import logger
 
 from kiro.parsers import AwsEventStreamParser, find_matching_brace
 from extensions.request_context import ensure_request_state
+from kiro.native_reasoning import NativeMessageLedger, NativeReasoningError, normalize_delta, reasoning_store
 
 
 
@@ -233,6 +235,7 @@ class DecodingEventStreamParser(AwsEventStreamParser):
         self._byte_buffer = bytearray()
         self._text_decoder = codecs.getincrementaldecoder("utf-8")(errors="ignore")
         self._consecutive_errors = 0
+        self._ever_corrupt = False
         self._resyncing = False
         self._resync_skipped = 0
         self._decoder_stopped = False
@@ -284,6 +287,10 @@ class DecodingEventStreamParser(AwsEventStreamParser):
         self._byte_buffer.clear()
         return self._feed_text(pending)
     
+    def expect_binary(self) -> None:
+        """Honor an explicit eventstream content type instead of sniffing corrupted bytes."""
+        self._mode = self._MODE_BINARY
+
     def _detect_mode(self) -> Optional[str]:
         """
         Decides whether the stream is binary eventstream or plain text.
@@ -417,6 +424,7 @@ class DecodingEventStreamParser(AwsEventStreamParser):
         Args:
             message: Error description
         """
+        self._ever_corrupt = True
         self._consecutive_errors += 1
         logger.warning(
             f"AWS eventstream decode error {self._consecutive_errors}/{EVENTSTREAM_MAX_CONSECUTIVE_ERRORS}: {message}"
@@ -495,9 +503,19 @@ class DecodingEventStreamParser(AwsEventStreamParser):
         try:
             data = json.loads(payload.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
-            logger.warning(f"Failed to decode '{event_type}' payload: {e}. Raw: {payload[:100]!r}")
+            self._register_error(f"Invalid JSON/UTF-8 in '{event_type}' event ({len(payload)} bytes)")
             return None
         
+        if event_type == "reasoningContentEvent":
+            if isinstance(data, dict):
+                data = {key: data[key] for key in ("text", "signature", "redactedContent") if data.get(key) is not None}
+                if not data:
+                    return None
+            try:
+                normalized = normalize_delta(data)
+                return {"type": "native_reasoning", "data": normalized} if any(normalized.values()) else None
+            except NativeReasoningError as error:
+                return {"type": "exception", "data": {"exception_type": "InvalidReasoningEvent", "message": str(error)}}
         if event_type == "metadataEvent":
             return self._process_metadata_event(data)
         
@@ -517,6 +535,8 @@ class DecodingEventStreamParser(AwsEventStreamParser):
             logger.warning(f"Unexpected '{event_type}' payload type: {type(data).__name__}")
             return None
         
+        if internal_type == "content" and isinstance(data.get("modelId"), str) and not data.get("content"):
+            return {"type": "model_metadata", "data": data["modelId"]}
         if internal_type == "content" and "content" not in data:
             # e.g. an assistantResponseEvent carrying only metadata such as modelId
             logger.debug(f"Ignoring assistantResponseEvent without content, keys {list(data.keys())[:5]}")
@@ -528,7 +548,10 @@ class DecodingEventStreamParser(AwsEventStreamParser):
                 logger.debug(f"Ignoring AWS event '{event_type}' with keys {list(data.keys())[:5]}")
                 return None
         
-        return self._process_event(data, internal_type)
+        event = self._process_event(data, internal_type)
+        if event is not None and internal_type == "content" and isinstance(data.get("modelId"), str):
+            event["model_id"] = data["modelId"]
+        return event
     
     def _detect_event_type_from_keys(self, data: Dict[str, Any]) -> Optional[str]:
         """
@@ -548,6 +571,16 @@ class DecodingEventStreamParser(AwsEventStreamParser):
                 return key_map[key]
         return None
     
+    def _process_content_event(self, data: dict) -> Optional[Dict[str, Any]]:
+        """Binary assistant events are deltas: identical consecutive text is valid."""
+        if self._mode == self._MODE_BINARY:
+            content = data.get("content", "")
+            if not isinstance(content, str):
+                raise EventStreamDecodeError("assistantResponseEvent content must be text")
+            self.last_content = content
+            return {"type": "content", "data": content} if content else None
+        return super()._process_content_event(data)
+
     def _process_tool_use_event(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Processes a binary toolUseEvent payload.
@@ -567,15 +600,28 @@ class DecodingEventStreamParser(AwsEventStreamParser):
             self.current_tool_call is None or (tool_use_id is not None and tool_use_id != current_id)
         )
         
+        before = len(self.tool_calls)
         if is_new_call:
-            return self._process_tool_start_event(data)
-        
-        if "input" in data:
-            self._process_tool_input_event(data)
-        if data.get("stop"):
-            self._process_tool_stop_event(data)
-        return None
+            self._process_tool_start_event(data)
+        else:
+            if "input" in data:
+                self._process_tool_input_event(data)
+            if data.get("stop"):
+                self._process_tool_stop_event(data)
+        completed = self.tool_calls[before:]
+        return {"type": "tool_batch", "data": completed} if completed else None
     
+    def finish(self) -> None:
+        """Reject an incomplete binary frame at EOF instead of silently losing it."""
+        if self._ever_corrupt:
+            raise EventStreamDecodeError("Kiro stream contained corrupt frames; recovered bytes cannot be reported as a complete response")
+        if self.current_tool_call and getattr(self, "_native_reasoning_seen", False):
+            raise EventStreamDecodeError("Native stream ended before a tool-use stop event")
+        if self._byte_buffer and (self._mode == self._MODE_BINARY or (
+            self._mode == self._MODE_UNKNOWN and self._byte_buffer[0] < 32
+        )):
+            raise EventStreamDecodeError("Kiro eventstream ended inside a frame")
+
     def _process_metadata_event(self, data: Any) -> Optional[Dict[str, Any]]:
         """
         Handles metadataEvent frames.
@@ -593,10 +639,14 @@ class DecodingEventStreamParser(AwsEventStreamParser):
         if not isinstance(data, dict):
             return None
         stop_reason = data.get("stopReason")
+        if stop_reason in ("MAX_TOKENS", "MAX_OUTPUT_TOKENS"):
+            return {"type": "exception", "data": {"exception_type": "ContentLengthExceededException", "message": "Upstream reached its output limit"}}
+        if data.get("responseStatus") == "incomplete" and stop_reason != "CONTENT_FILTERED":
+            return {"type": "exception", "data": {"exception_type": "IncompleteResponseException", "message": "Upstream response is incomplete"}}
         details = data.get("stopDetails") if isinstance(data.get("stopDetails"), dict) else {}
         refusal = details.get("refusal") if isinstance(details.get("refusal"), dict) else None
         if stop_reason != "CONTENT_FILTERED" and refusal is None:
-            logger.debug(f"metadataEvent: {str(data)[:200]}")
+            logger.debug("metadataEvent fields: {}", list(data) if isinstance(data, dict) else type(data).__name__)
             return None
         category = (refusal or {}).get("category") or stop_reason or "CONTENT_FILTERED"
         explanation = (refusal or {}).get("explanation") or "The model refused to continue."
@@ -714,7 +764,7 @@ class DecodingEventStreamParser(AwsEventStreamParser):
         elif event_type == 'tool_stop':
             return self._process_tool_stop_event(data)
         elif event_type == 'usage':
-            logger.debug(f"[raw-event] metering payload: {data!r}")
+            logger.debug("Metering fields: {}", list(data) if isinstance(data, dict) else type(data).__name__)
             return {"type": "usage", "data": self._normalize_metering(data)}
         elif event_type == 'context_usage':
             return {"type": "context_usage", "data": data.get('contextUsagePercentage', 0)}
@@ -806,49 +856,71 @@ def install_kiro_stream_decoder() -> None:
     inner_parse = streaming_core.parse_kiro_stream
 
     async def process_chunk_with_exceptions(parser, chunk, thinking_parser):
-        """Upstream _process_chunk, plus exception events (which upstream drops)."""
-        events = parser.feed(chunk)
-        regular = [e for e in events if e.get("type") != "exception"]
-        exceptions = [e for e in events if e.get("type") == "exception"]
-
+        """Preserve exact event ordering, including a terminal exception position."""
         class _Replay:
-            """Hands the already-decoded events to upstream's chunk processor."""
+            def __init__(self, event):
+                self.event = event
             def feed(self, _chunk):
-                return regular
+                return [self.event]
 
-        async for event in original_process_chunk(_Replay(), chunk, thinking_parser):
-            yield event
-        # An exception frame ends the stream, so yielding it after the chunk's
-        # regular events keeps the observable order.
-        for e in exceptions:
-            data = e.get("data") or {}
-            yield StreamExceptionEvent(
-                exception_type=data.get("exception_type") or "UnknownException",
-                exception_message=data.get("message") or "",
-            )
+        for event in parser.feed(chunk):
+            if event.get("type") == "exception":
+                data = event.get("data") or {}
+                yield StreamExceptionEvent(data.get("exception_type") or "UnknownException", data.get("message") or "")
+                return
+            if event.get("type") == "native_reasoning":
+                parser._native_reasoning_seen = True
+            legacy_parser = None if getattr(parser, "_native_reasoning_seen", False) else thinking_parser
+            async for parsed in original_process_chunk(_Replay(event), chunk, legacy_parser):
+                yield parsed
 
     async def parse_kiro_stream_surfacing(*args, **kwargs) -> AsyncGenerator[Any, None]:
-        """parse_kiro_stream that consumes exception events and merges metering."""
+        """Surface typed errors, merge usage, and bind completed native output."""
         state = ensure_request_state()
         merged_usage: Dict[str, Any] = {}
-        async for event in inner_parse(*args, **kwargs):
-            if isinstance(event, StreamExceptionEvent):
-                if is_content_length_exception(event.exception_type):
-                    logger.warning(
-                        f"Upstream stopped generation: {event.exception_type} "
-                        f"({event.exception_message}) -> max_tokens"
-                    )
-                    state.length_exceeded = True
-                    continue
-                error = KiroStreamError(event.exception_type, event.exception_message)
-                state.stream_error = error
-                logger.error(str(error))
-                raise error
-            if event.type == "usage" and isinstance(event.usage, dict):
-                # Kiro can send several metering events; keep every field
-                merged_usage.update(event.usage)
-                event.usage = dict(merged_usage)
-            yield event
+        ledger = NativeMessageLedger()
+        state.native_ledger = ledger
+        state.response_model_id = None
+        if len(args) >= 3:
+            args = (*args[:2], bool(args[2] and state.legacy_thinking), *args[3:])
+        else:
+            kwargs["enable_thinking_parser"] = bool(kwargs.get("enable_thinking_parser", True) and state.legacy_thinking)
+        iterator = inner_parse(*args, **kwargs)
+        try:
+            async for event in iterator:
+                if isinstance(event, StreamExceptionEvent):
+                    if is_content_length_exception(event.exception_type):
+                        state.length_exceeded = True
+                        break
+                    error = KiroStreamError(event.exception_type, event.exception_message)
+                    state.stream_error = error
+                    raise error
+                if event.type == "model_metadata" and event.resolved_model_id:
+                    if ledger.has_native and state.response_model_id and state.response_model_id != event.resolved_model_id:
+                        raise NativeReasoningError("Upstream reported conflicting model IDs; native reasoning cannot be bound safely")
+                    state.response_model_id = event.resolved_model_id
+                if event.type == "usage" and isinstance(event.usage, dict):
+                    merged_usage.update(event.usage)
+                    event.usage = dict(merged_usage)
+                index = ledger.feed(event)
+                if event.type == "native_reasoning":
+                    event.native_index = index
+                yield event
+            if state.wire_identity is not None and state.account_scope and state.upstream_model_id:
+                reasoning_store.record(
+                    (state.client_scope, state.account_scope, state.response_model_id or state.upstream_model_id),
+                    state.wire_identity, state.input_turn_anchor, ledger,
+                )
+        except (NativeReasoningError, EventStreamDecodeError) as error:
+            surfaced = KiroStreamError("InvalidNativeStreamException", str(error))
+            state.stream_error = surfaced
+            raise surfaced from error
+        except (streaming_core.StreamDeadlineExceeded, streaming_core.StreamIdleTimeoutError, httpx.TimeoutException) as error:
+            surfaced = KiroStreamError("RequestTimeoutException", str(error))
+            state.stream_error = surfaced
+            raise surfaced from error
+        finally:
+            await iterator.aclose()
 
     streaming_core.AwsEventStreamParser = DecodingEventStreamParser
     streaming_core._process_chunk = process_chunk_with_exceptions

@@ -625,3 +625,60 @@ class TestEnhanceImproperlyFormedRequest:
 
         # Should fall through to generic handler, not the size-limit message
         assert "payload size exceeded" not in error_info.user_message
+
+
+class TestResponsesErrorEnvelope:
+    """Preserve actionable Responses failures without altering Generate errors."""
+
+    def test_nested_error_preserves_message_and_code(self):
+        error = {"error": {"message": "systemPrompt field is not enabled for this user.",
+                           "type": "invalid_request", "param": "instructions",
+                           "code": "unsupported_parameter"}}
+        result = enhance_kiro_error(error)
+        assert result.original_message == error["error"]["message"]
+        assert result.reason == "unsupported_parameter"
+        assert result.user_message == result.original_message + " (reason: unsupported_parameter) (parameter: instructions)"
+        assert "reason" not in error["error"]
+
+    @pytest.mark.parametrize("message", ["", "Request rejected."])
+    def test_nested_message_preserves_empty_strings(self, message):
+        result = enhance_kiro_error({"error": {"message": message}})
+        assert result.original_message == message
+        assert result.user_message == message
+        assert result.reason == "UNKNOWN"
+
+    def test_nested_type_is_used_when_code_is_null(self):
+        result = enhance_kiro_error({"error": {"message": "Denied.", "code": None,
+                                             "type": "permission_error"}})
+        assert result.reason == "permission_error"
+        assert result.user_message == "Denied. (reason: permission_error)"
+
+    def test_nested_reason_uses_existing_context_limit_enhancement(self):
+        result = enhance_kiro_error({"error": {"message": "Input too long.",
+                                             "reason": "CONTENT_LENGTH_EXCEEDS_THRESHOLD"}})
+        assert result.user_message == "Model context limit reached. Conversation size exceeds model capacity."
+
+    @pytest.mark.parametrize("value", [None, [], "not an object", 7,
+        {"error": None}, {"error": ["untrusted"]},
+        {"error": {"message": {"credentials": "not-for-diagnostics"}, "code": []}}])
+    def test_malformed_envelopes_are_not_stringified(self, value):
+        result = enhance_kiro_error(value)
+        assert result.user_message == "Unknown error"
+        assert result.reason == "UNKNOWN"
+
+    def test_malformed_nested_message_uses_valid_outer_message(self):
+        result = enhance_kiro_error({"message": "Outer failure.", "error": {"message": None}})
+        assert result.original_message == "Outer failure."
+
+
+@pytest.mark.parametrize("parameter", [None, [], {}, "", "not a field", "x" * 129, "field\nsecret"])
+def test_responses_error_ignores_malformed_parameter_path(parameter):
+    """Error diagnostics must not stringify arbitrary parameter values."""
+    result = enhance_kiro_error({"error": {"message": "Rejected.", "param": parameter}})
+    assert result.user_message == "Rejected."
+
+
+def test_responses_error_preserves_indexed_parameter_path():
+    """Array member locations help callers repair unsupported request fields."""
+    result = enhance_kiro_error({"error": {"message": "Rejected.", "param": "input[0].content"}})
+    assert result.user_message == "Rejected. (parameter: input[0].content)"

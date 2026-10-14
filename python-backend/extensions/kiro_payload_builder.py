@@ -1,42 +1,17 @@
-"""
-Kiro payload building, ported from the kiro-gateway fork (61d9b68 + dc0fe43).
+"""Kiro command construction with explicit identity and capability contracts.
 
-Runtime replacement for kiro.converters_core.build_kiro_payload and the helpers
-it relies on, so kiro/ stays zero-diff. The function bodies below are the
-fork's, unchanged except that upstream settings are read live from
-kiro.converters_core. What changes on the wire:
+Installed by app_entry after tool aliases. Tools preserve schema semantics;
+mode/task type and conversation/turn identity are independent. Additional model
+fields use the selected account's advertised schema, never model-name heuristics,
+forced effort defaults, or silent token clamping. Missing metadata is unknown and
+explicit parameters fail actionably until verified metadata is available.
 
-- The system prompt goes into a dedicated leading history pair (user: system,
-  assistant: "I will follow these instructions.") instead of being glued onto
-  the first user message. The prefix stays byte-stable across turns, which is
-  what upstream prompt caching keys on, and auto-trim never removes that pair.
-- Tool JSON schemas are normalised to the strict subset Kiro accepts ($ref
-  resolution, anyOf/oneOf/allOf collapse, type arrays, key whitelist).
-- toolUse/toolResult pairing is repaired: duplicate results dropped, orphan
-  results turned into text, toolUses without a result removed. Tools that only
-  appear in history get placeholder specs.
-- Trailing assistant messages (prefill) are dropped; Kiro does not support it.
-- conversationState gets agentTaskType (spectask with tools, vibe otherwise)
-  and a stable agentContinuationId derived from the conversationId.
-- Top-level additionalModelRequestFields: output_config.effort + clamped
-  max_tokens for Claude >= 4.6, reasoning.effort for GPT. The client's effort is
-  passed through; KIRO_DEFAULT_CLAUDE_EFFORT / KIRO_DEFAULT_GPT_EFFORT otherwise.
-- Fake reasoning (<thinking_mode> tags) is never injected into models with
-  native reasoning (Claude >= 4.6, GPT): claude-opus-5.5 refuses those requests
-  with CONTENT_FILTERED / REASONING_EXTRACTION. For older models tags are only
-  injected when the client explicitly asks (FAKE_REASONING_MODE=explicit, the
-  default), and the slow "take the time you need" instruction is gone.
-
-Settings (env, all optional): FAKE_REASONING_MODE (explicit | always),
-KIRO_ADDITIONAL_MODEL_FIELDS (true), KIRO_DEFAULT_CLAUDE_EFFORT (low),
-KIRO_DEFAULT_GPT_EFFORT (high).
-
-Install after tool_name_alias: its wrappers of convert_tools_to_kiro_format,
-extract_tool_uses_from_message and validate_tool_names live in the
-kiro.converters_core namespace, which the code below calls through at runtime.
+Legacy textual thinking tags require KIRO_LEGACY_FAKE_REASONING=true and remain
+separate from native thinking fields. Native/system/transport choices are explicit
+protocol features; the legacy system history prefix is not a universal CLI contract.
 """
 
-import hashlib
+from contextvars import ContextVar
 import json
 import os
 import re
@@ -44,6 +19,13 @@ import uuid
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from loguru import logger
+
+from extensions.request_context import current_state
+from extensions.session_identity import SessionIdentity, request_identity
+from kiro.native_reasoning import NativeReasoningError, reasoning_blocks, reasoning_store, expand_history, tool_ids, restore_native_projections
+from extensions.tool_schema import normalize_tool_schema
+from extensions.protocol_runtime import configured_profile
+from extensions.model_capabilities import (CapabilityStatus, ModelCapabilities, ModelCapabilityError, build_model_request_fields, build_responses_request_fields)
 
 import kiro.converters_core as _core
 from kiro.converters_core import (
@@ -70,7 +52,7 @@ from kiro.payload_guards import (
     _align_to_user_message,
     _repair_orphaned_tool_results,
     _strip_empty_tool_uses,
-    check_payload_size,
+    check_payload_size as _base_check_payload_size,
 )
 
 
@@ -90,19 +72,11 @@ FAKE_REASONING_MODE: str = _FAKE_REASONING_MODE_RAW if _FAKE_REASONING_MODE_RAW 
 # Send additionalModelRequestFields (output_config.effort / max_tokens / reasoning.effort)
 KIRO_ADDITIONAL_MODEL_FIELDS: bool = _env_flag("KIRO_ADDITIONAL_MODEL_FIELDS", "true")
 
-# Assistant reply paired with the system prompt history entry (matches Kiro CLI / reference)
+# Legacy gateway system-prefix acknowledgment; not a universal CLI wire contract.
 SYSTEM_PROMPT_ACKNOWLEDGEMENT = "I will follow these instructions."
 
 # Description of placeholder tool specs generated for tools referenced only in history
 PLACEHOLDER_TOOL_DESCRIPTION = "Tool used in conversation history"
-
-# Default efforts when the client does not send one. "low" for Claude cuts
-# time-to-first-token; raise it if you prefer deeper reasoning.
-DEFAULT_CLAUDE_EFFORT = os.getenv("KIRO_DEFAULT_CLAUDE_EFFORT", "low")
-DEFAULT_GPT_EFFORT = os.getenv("KIRO_DEFAULT_GPT_EFFORT", "high")
-
-# Kiro schema enforces max_tokens >= 1024 in additionalModelRequestFields
-MIN_ADDITIONAL_MAX_TOKENS = 1024
 
 # Content used for user messages that only carry toolResults
 TOOL_RESULT_ONLY_CONTENT = "(tool result above)"
@@ -113,7 +87,7 @@ EMPTY_CONTENT_FALLBACK = "(empty placeholder)"
 
 def _fake_reasoning_enabled() -> bool:
     """Upstream FAKE_REASONING switch, read live so patches in tests take effect."""
-    return _core.FAKE_REASONING_ENABLED
+    return _core.FAKE_REASONING_ENABLED and _env_flag("KIRO_LEGACY_FAKE_REASONING", "false")
 
 
 # ==================================================================================================
@@ -151,27 +125,35 @@ def get_thinking_system_prompt_addition() -> str:
     )
 
 
+def get_model_capabilities(model_id: str) -> ModelCapabilities:
+    """Read the selected account cache, preserving UNKNOWN on absent metadata."""
+    from kiro.model_resolver import normalize_model_name
+
+    state = current_state()
+    cache = state.model_cache if state is not None else None
+    raw = None
+    if cache is not None:
+        candidate = cache.get(model_id)
+        if isinstance(candidate, dict):
+            raw = candidate
+        if raw is None:
+            ids = cache.get_all_model_ids()
+            if isinstance(ids, list):
+                for key in ids:
+                    item = cache.get(key)
+                    if isinstance(item, dict) and (
+                        item.get("_internal_id") == model_id
+                        or normalize_model_name(key) == normalize_model_name(model_id)
+                    ):
+                        raw = item
+                        break
+    return ModelCapabilities.from_model(raw, model_id=model_id)
+
+
 def model_has_native_reasoning(model_id: str) -> bool:
-    """
-    Whether a model's reasoning is controlled natively (effort), not via fake tags.
-
-    Claude >= 4.6 and GPT models reason through output_config / reasoning effort.
-    Injecting <thinking_mode> tags into them is harmful: claude-opus-5.5 refuses
-    with CONTENT_FILTERED / REASONING_EXTRACTION, and it slows time-to-first-token.
-
-    Args:
-        model_id: Kiro model ID
-
-    Returns:
-        True if fake reasoning tags must not be injected
-    """
-    m = (model_id or "").lower()
-    if is_gpt_model(m):
-        return True
-    if not m.startswith("claude-"):
-        return False
-    version = _claude_version(m)
-    return version is not None and version >= (4, 6)
+    """Whether selected-account metadata advertises native reasoning controls."""
+    capability = get_model_capabilities(model_id)
+    return CapabilityStatus.SUPPORTED in (capability.effort.status, capability.thinking.status)
 
 
 def should_inject_thinking(thinking_config: ThinkingConfig, model_id: str) -> bool:
@@ -244,220 +226,14 @@ def inject_thinking_tags(content: str, thinking_config: ThinkingConfig, model_id
 # JSON Schema Sanitization
 # ==================================================================================================
 
-_SCHEMA_BASIC_TYPES = ("object", "array", "string", "number", "integer", "boolean")
-_SCHEMA_MAX_REF_DEPTH = 16
-_SCHEMA_DESCRIPTION_MAX_CHARS = 2000
-_SCHEMA_COMBINATOR_KEYS = ("anyOf", "oneOf", "allOf")
-
-
-def _extract_schema_defs(schema: Any) -> Dict[str, Any]:
-    """
-    Collect top-level `$defs` / `definitions` as the `$ref` resolution table.
-
-    Args:
-        schema: Root JSON Schema
-
-    Returns:
-        Mapping of definition name to schema
-    """
-    defs: Dict[str, Any] = {}
-    if isinstance(schema, dict):
-        for key in ("$defs", "definitions"):
-            table = schema.get(key)
-            if isinstance(table, dict):
-                defs.update(table)
-    return defs
-
-
-def _resolve_schema_refs(value: Any, defs: Dict[str, Any], depth: int) -> Any:
-    """
-    Recursively inline `#/$defs/<name>` and `#/definitions/<name>` references.
-
-    Sibling keys next to `$ref` (e.g. description) win over the target's keys.
-    Unresolvable refs (external URLs, OpenAPI paths, missing defs) and refs beyond
-    the depth limit (cycles) degrade to a permissive object schema.
-
-    Args:
-        value: Schema node
-        defs: Definition table from the root schema
-        depth: Current `$ref` expansion depth
-
-    Returns:
-        Schema node without `$ref`
-    """
-    if depth > _SCHEMA_MAX_REF_DEPTH:
-        return {"type": "object"}
-
-    if isinstance(value, list):
-        return [_resolve_schema_refs(item, defs, depth) for item in value]
-    if not isinstance(value, dict):
-        return value
-
-    obj = dict(value)
-    ref = obj.pop("$ref", None)
-    if isinstance(ref, str):
-        name: Optional[str] = None
-        for prefix in ("#/$defs/", "#/definitions/"):
-            if ref.startswith(prefix):
-                name = ref[len(prefix):]
-                break
-        target = defs.get(name) if name is not None else None
-        if isinstance(target, dict):
-            resolved = _resolve_schema_refs(target, defs, depth + 1)
-            if isinstance(resolved, dict):
-                for key, val in resolved.items():
-                    obj.setdefault(key, val)
-        else:
-            logger.debug(f"Unresolvable $ref in tool schema, degrading to permissive object: {ref}")
-            obj.setdefault("type", "object")
-
-    return {key: _resolve_schema_refs(val, defs, depth) for key, val in obj.items()}
-
-
-def _normalize_schema_type(raw: Any) -> Optional[str]:
-    """
-    Normalize a JSON Schema `type` value to a single basic type.
-
-    Args:
-        raw: `type` value (string or list of strings)
-
-    Returns:
-        Basic type name, or None if no supported type is present
-    """
-    candidates = raw if isinstance(raw, list) else [raw]
-    for candidate in candidates:
-        if isinstance(candidate, str) and candidate.strip() in _SCHEMA_BASIC_TYPES:
-            return candidate.strip()
-    return None
-
-
-def _collapse_schema_combinators(obj: Dict[str, Any]) -> None:
-    """
-    Remove anyOf/oneOf/allOf, keeping the single real branch when there is one.
-
-    Kiro rejects combinator schemas, so the reference drops them. As a strict
-    superset, when a combinator has exactly one non-null branch (the common
-    pydantic `Optional[X]` / `allOf: [{$ref}]` shapes) that branch's keys are
-    merged in (existing keys win) so the constraint is not lost.
-
-    Args:
-        obj: Schema object (mutated in place)
-    """
-    for key in _SCHEMA_COMBINATOR_KEYS:
-        variants = obj.pop(key, None)
-        if not isinstance(variants, list):
-            continue
-        branches = [
-            v for v in variants
-            if isinstance(v, dict) and v.get("type") != "null"
-        ]
-        if len(branches) == 1:
-            for branch_key, branch_value in branches[0].items():
-                if branch_key not in _SCHEMA_COMBINATOR_KEYS:
-                    obj.setdefault(branch_key, branch_value)
-
-
-def _normalize_schema_node(schema: Any, root: bool) -> Dict[str, Any]:
-    """
-    Normalize one schema node into the strict subset Kiro accepts.
-
-    Args:
-        schema: Schema node (refs already resolved)
-        root: Whether this is the root (always an object schema)
-
-    Returns:
-        Normalized schema with only type/properties/required/items/description/enum
-    """
-    if not isinstance(schema, dict):
-        return {"type": "object", "properties": {}}
-
-    obj = {key: val for key, val in schema.items() if val is not None}
-    _collapse_schema_combinators(obj)
-    obj = {key: val for key, val in obj.items() if val is not None}
-
-    normalized_type = _normalize_schema_type(obj.get("type"))
-    is_object = root or normalized_type == "object" or (
-        normalized_type is None and "properties" in obj
-    )
-
-    result: Dict[str, Any] = {}
-    if is_object:
-        result["type"] = "object"
-    elif normalized_type:
-        result["type"] = normalized_type
-
-    if is_object:
-        raw_props = obj.get("properties")
-        properties: Dict[str, Any] = {}
-        if isinstance(raw_props, dict):
-            for prop_name, prop_schema in raw_props.items():
-                properties[str(prop_name)] = _normalize_schema_node(prop_schema, False)
-        result["properties"] = properties
-
-        raw_required = obj.get("required")
-        required: List[str] = []
-        if isinstance(raw_required, list):
-            for name in raw_required:
-                if isinstance(name, str) and name in properties and name not in required:
-                    required.append(name)
-        # Kiro rejects empty required arrays - only emit when non-empty
-        if required:
-            result["required"] = required
-
-    items = obj.get("items")
-    if isinstance(items, list):
-        first = next((item for item in items if isinstance(item, dict)), None)
-        if first is not None:
-            result["items"] = _normalize_schema_node(first, False)
-    elif isinstance(items, dict):
-        result["items"] = _normalize_schema_node(items, False)
-
-    description = obj.get("description")
-    if isinstance(description, str):
-        result["description"] = description[:_SCHEMA_DESCRIPTION_MAX_CHARS]
-
-    enum_values = obj.get("enum")
-    if isinstance(enum_values, list):
-        scalars = [v for v in enum_values if isinstance(v, (str, int, float, bool))]
-        if scalars:
-            result["enum"] = scalars
-
-    # additionalProperties and all other keywords are dropped (Kiro strict mode)
-    return result
-
-
 def sanitize_json_schema(schema: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Normalize tool schemas without dropping constraints or inlining references.
+
+    Resource and structural errors remain ValueErrors so both API routes return
+    actionable client errors rather than silently widening accepted tool inputs.
     """
-    Normalizes a tool JSON Schema into the strict subset the Kiro API accepts.
+    return normalize_tool_schema(schema)
 
-    Kiro returns 400 "Improperly formed request" for many valid JSON Schemas.
-    Port of kiro2cc-proxy schema.rs:
-    - `$ref` resolved against `$defs`/`definitions` (depth limit 16); unresolvable
-      refs become a permissive object; `$defs`/`definitions` dropped
-    - null values stripped; `type` arrays reduced to the first non-null basic type
-    - object schemas always get a dict `properties`; `required` keeps only strings
-      that exist in `properties` and is omitted when empty
-    - `items` must be a schema (first schema of a tuple list)
-    - anyOf/oneOf/allOf removed (single non-null branch merged in)
-    - keys whitelisted to type/properties/required/items/description/enum
-      (so `additionalProperties` is always dropped)
-    - the root is always an object schema
-
-    Args:
-        schema: JSON Schema to sanitize
-
-    Returns:
-        Sanitized copy of schema (never mutates the input)
-    """
-    defs = _extract_schema_defs(schema)
-    resolved = _resolve_schema_refs(schema if schema is not None else {}, defs, 0)
-    return _normalize_schema_node(resolved, True)
-
-
-
-# ==================================================================================================
-# toolUse/toolResult Pairing and Trimming (kiro/payload_guards.py in the fork)
-# ==================================================================================================
 
 def _tool_result_text(tool_result: Dict[str, Any]) -> str:
     """
@@ -640,6 +416,82 @@ def repair_tool_pairing(
     return kept_current, current_orphan_text
 
 
+def _expand_native_history(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Expand signed assistant groups only after pairing repair and whole-turn trim."""
+    result = []
+    for entry in history:
+        assistant = entry.get("assistantResponseMessage", {})
+        native = assistant.get("_native_history")
+        if native is None:
+            result.append(entry)
+            continue
+        expected = [tool for part in native for tool in part.get("assistantResponseMessage", {}).get("toolUses", [])]
+        if tool_ids(assistant.get("toolUses")) != tool_ids(expected):
+            raise NativeReasoningError("Tool pairing repair changed signed native history; provide complete tool results")
+        result.extend(native)
+    return result
+
+
+def check_payload_size(payload: Dict[str, Any]) -> int:
+    """Measure the actual wire history while trimming compact signed turn groups."""
+    conversation = payload.get("conversationState", {})
+    if "history" not in conversation:
+        return _base_check_payload_size(payload)
+    return _base_check_payload_size({**payload, "conversationState": {
+        **conversation, "history": _expand_native_history(conversation["history"]),
+    }})
+
+
+def _find_native_record(model_id: str, content: str, tools: Any, native: Any) -> Any:
+    """Resolve generated native state without trusting caller-provided model labels."""
+    if not native:
+        return None
+    state = current_state()
+    if state is None or not state.account_scope:
+        raise NativeReasoningError("Native history requires a selected account and managed request context")
+    record = reasoning_store.find((state.client_scope, state.account_scope, model_id), content, tools, native)
+    identity = state.wire_identity
+    if record is not None and identity is not None and record.root_conversation_id != identity.root_conversation_id:
+        raise NativeReasoningError("Native reasoning belongs to a different root conversation; keep its original session")
+    return record
+
+
+def _prepare_native_history(request: Any, *, anthropic: bool) -> Any:
+    """Recover anonymous session identity only from verified upstream output, never prompts."""
+    from kiro.model_resolver import get_model_id_for_kiro
+    from kiro.config import HIDDEN_MODELS
+
+    model_id = get_model_id_for_kiro(request.model, HIDDEN_MODELS)
+    state = current_state()
+    if state is not None:
+        state.upstream_model_id = model_id
+        state.recovered_reasoning_record = None
+        state.wire_identity = None
+    if state is not None and state.account_scope:
+        restored = restore_native_projections(request.messages, scope=(state.client_scope, state.account_scope, model_id), anthropic=anthropic)
+        request = request.model_copy(update={"messages": restored})
+    found = []
+    for message in request.messages:
+        if message.role != "assistant":
+            continue
+        blocks = message.content if anthropic else getattr(message, "reasoning_details", None)
+        native = reasoning_blocks(blocks)
+        if not native:
+            continue
+        plain_content = [block.model_dump() if hasattr(block, "model_dump") else block for block in message.content] if isinstance(message.content, list) else message.content
+        content = extract_text_content(plain_content)
+        tool_calls = getattr(message, "tool_calls", None)
+        tools = _core.extract_tool_uses_from_message(plain_content, tool_calls)
+        record = _find_native_record(model_id, content, tools, native)
+        if record is not None:
+            found.append(record)
+    if found and state is not None:
+        if len({record.root_conversation_id for record in found}) != 1:
+            raise NativeReasoningError("Native history contains unrelated root conversations")
+        state.recovered_reasoning_record = found[-1]
+    return request
+
+
 def trim_payload_to_limit(
     payload: Dict[str, Any],
     max_bytes: int,
@@ -745,7 +597,7 @@ def build_kiro_history(messages: List[UnifiedMessage], model_id: str) -> List[Di
             user_input = {
                 "content": content,
                 "modelId": model_id,
-                "origin": "AI_EDITOR",
+                "origin": configured_profile().origin,
             }
             
             # Process images - extract from message or content
@@ -783,13 +635,15 @@ def build_kiro_history(messages: List[UnifiedMessage], model_id: str) -> List[Di
             # Process tool_calls
             tool_uses = _core.extract_tool_uses_from_message(msg.content, msg.tool_calls)
             
-            # Fallback for empty content - Kiro API requires non-empty content.
-            # Assistant turns with only toolUses use a single space (reference behaviour).
-            if not content.strip():
+            record = _find_native_record(model_id, content, tool_uses, msg.native_blocks)
+            # Unsigned empty turns keep the legacy fallback; native reasoning entries
+            # explicitly allow empty content, as in the shipped CLI expansion.
+            if not content.strip() and record is None:
                 content = " " if tool_uses else EMPTY_CONTENT_FALLBACK
             
             assistant_response = {"content": content}
-            
+            if record is not None:
+                assistant_response["_native_history"] = expand_history(record, tool_uses)
             if tool_uses:
                 assistant_response["toolUses"] = tool_uses
             
@@ -803,163 +657,75 @@ def build_kiro_history(messages: List[UnifiedMessage], model_id: str) -> List[Di
 # ==================================================================================================
 
 def derive_agent_continuation_id(conversation_id: str) -> str:
+    """Allocate a new execution ID; conversation identity cannot define its lifetime.
+
+    Retained as a compatibility helper. Session-aware callers must use
+    request_identity so tool continuations and physical retries share their turn.
     """
-    Derive a stable agentContinuationId from the conversationId.
-
-    Port of kiro2cc-proxy session.rs: SHA-256 over "agent-continuation:" + id,
-    first 16 bytes formatted as a UUID string. The same conversationId always
-    yields the same agentContinuationId.
-
-    Args:
-        conversation_id: Conversation ID sent in conversationState
-
-    Returns:
-        UUID-formatted lowercase hex string
-    """
-    digest = hashlib.sha256(b"agent-continuation:" + conversation_id.encode("utf-8")).hexdigest()
-    return f"{digest[0:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}"
+    return str(uuid.uuid4())
 
 
 def determine_agent_task_type(tools: Optional[List[UnifiedTool]]) -> str:
-    """
-    Determine conversationState.agentTaskType (reference convert.rs).
-
-    Args:
-        tools: Tools declared by the client
-
-    Returns:
-        "spectask" when any tool is declared, otherwise "vibe"
-    """
-    return "spectask" if tools else "vibe"
-
-
-def is_gpt_model(model_id: str) -> bool:
-    """
-    Check whether the Kiro model ID belongs to the GPT family.
-
-    Args:
-        model_id: Kiro model ID
-
-    Returns:
-        True for gpt-* models
-    """
-    return model_id.lower().startswith("gpt-")
+    """Read explicit task semantics, independently of the declared tool list."""
+    state = current_state()
+    return state.task_type if state is not None else "vibe"
 
 
 def additional_fields_skipped(model_id: str) -> bool:
-    """
-    Check whether additionalModelRequestFields must be omitted for a model.
-
-    Kiro rejects the field for the "4.5" generation (sonnet/opus/haiku 4.5) with
-    400 REQUEST_BODY_INVALID (reference thinking.rs). Legacy claude-3.x models
-    are also skipped (the reference never sends to them), as are non-Claude,
-    non-GPT models whose schema is unknown.
-
-    Args:
-        model_id: Kiro model ID
-
-    Returns:
-        True if the field must not be sent
-    """
-    m = model_id.lower()
-    if is_gpt_model(m):
-        return False
-    if not m.startswith("claude-"):
-        return True
-    # Only send to generations known to accept it (>= 4.6). Kiro rejects it for
-    # claude-3.x, 4.0 (verified: claude-sonnet-4) and 4.5 with REQUEST_BODY_INVALID.
-    version = _claude_version(m)
-    return version is None or version < (4, 6)
+    """Whether metadata advertises no usable additional fields (not a name gate)."""
+    return get_model_capabilities(model_id).schema_status is not CapabilityStatus.SUPPORTED
 
 
-def _claude_version(model_id: str) -> Optional[tuple]:
-    """
-    Extracts (major, minor) from a Claude model ID.
-
-    Handles "claude-sonnet-4.5", "claude-sonnet-4-5", "claude-opus-5", "claude-3.7-sonnet".
-
-    Args:
-        model_id: Lower-case Kiro model ID
-
-    Returns:
-        (major, minor) tuple, or None if no version found
-    """
-    match = re.search(r"(?<![\d])(\d+)(?:[.-](\d)(?![\d]))?", model_id)
-    if not match:
-        return None
-    return int(match.group(1)), int(match.group(2) or 0)
-
-
-def model_max_output_tokens(model_id: str) -> int:
-    """
-    Kiro max_tokens upper bound per model generation (reference fields.rs).
-
-    Args:
-        model_id: Kiro model ID
-
-    Returns:
-        128000 for opus 4.7 / 4.8 / 5.x, otherwise 64000
-    """
-    m = model_id.lower()
-    if any(tag in m for tag in ("opus-4-7", "opus-4.7", "opus-4-8", "opus-4.8", "opus-5", "opus.5", "opus 5")):
-        return 128000
-    return 64000
+def model_max_output_tokens(model_id: str) -> Optional[int]:
+    """Return the advertised output ceiling, or None when unknown/unbounded."""
+    capability = get_model_capabilities(model_id)
+    if capability.max_tokens.status is CapabilityStatus.SUPPORTED:
+        return capability.max_tokens.maximum
+    return capability.token_limits.max_output_tokens if capability.token_limits is not None else None
 
 
 def _extract_effort(output_config: Any) -> Optional[str]:
-    """
-    Read `effort` from an Anthropic output_config (dict or object).
-
-    Args:
-        output_config: output_config value from the client request
-
-    Returns:
-        Non-empty effort string, or None
-    """
+    """Read an exact explicit effort without silently stripping invalid values."""
     if output_config is None:
         return None
-    effort = output_config.get("effort") if isinstance(output_config, dict) else getattr(output_config, "effort", None)
-    if isinstance(effort, str) and effort.strip():
-        return effort.strip()
-    return None
+    if hasattr(output_config, "model_dump"):
+        output_config = output_config.model_dump(exclude_none=True)
+    if not isinstance(output_config, dict) or set(output_config) - {"effort"}:
+        raise ValueError("output_config currently accepts only effort; unsupported fields cannot be discarded")
+    if "effort" not in output_config:
+        return None
+    effort = output_config["effort"]
+    if not isinstance(effort, str) or not effort or effort != effort.strip():
+        raise ValueError("output_config.effort must be an exact nonempty advertised string")
+    return effort
 
 
 def build_additional_model_request_fields(
-    model_id: str,
-    max_tokens: Optional[int] = None,
-    output_config: Optional[Any] = None,
+    model_id: str, max_tokens: Optional[int] = None, output_config: Optional[Any] = None,
+    *, native_thinking: Optional[str] = None, thinking_budget: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
+    """Validate and serialize exact caller intent against account model metadata.
+
+    Unknown schemas are not inferred from the model ID. Native thinking budgets
+    are validated when advertised. Explicit legacy textual thinking is the sole
+    opt-in alternative, not an automatic fallback when the server rejects a field.
     """
-    Build top-level additionalModelRequestFields (port of reference fields.rs).
-
-    - Disabled entirely by KIRO_ADDITIONAL_MODEL_FIELDS=false
-    - Skipped for models in additional_fields_skipped() (4.5 generation etc.)
-    - GPT family: {"reasoning": {"effort": <effort or "high">}}
-    - Claude: {"output_config": {"effort": <effort or "low">},
-               "max_tokens": clamp(max_tokens, 1024, model cap)} (max_tokens only if > 0)
-    - The `thinking` field is intentionally never sent (reference: adds TTFB)
-
-    Args:
-        model_id: Kiro model ID
-        max_tokens: Client max_tokens (None/0 = omit)
-        output_config: Client output_config (dict with "effort"), optional
-
-    Returns:
-        Fields dict, or None when nothing should be sent
-    """
-    if not KIRO_ADDITIONAL_MODEL_FIELDS or additional_fields_skipped(model_id):
-        return None
-
     effort = _extract_effort(output_config)
-
-    if is_gpt_model(model_id):
-        return {"reasoning": {"effort": effort or DEFAULT_GPT_EFFORT}}
-
-    fields: Dict[str, Any] = {"output_config": {"effort": effort or DEFAULT_CLAUDE_EFFORT}}
-    if isinstance(max_tokens, int) and not isinstance(max_tokens, bool) and max_tokens > 0:
-        capped = min(max_tokens, model_max_output_tokens(model_id))
-        fields["max_tokens"] = max(capped, MIN_ADDITIONAL_MAX_TOKENS)
-    return fields
+    if not KIRO_ADDITIONAL_MODEL_FIELDS:
+        if any(value is not None for value in (max_tokens, effort, native_thinking, thinking_budget)):
+            raise ValueError("Additional model fields are disabled; enable KIRO_ADDITIONAL_MODEL_FIELDS to honor explicit generation parameters")
+        return None
+    capability = get_model_capabilities(model_id)
+    if configured_profile().generation_protocol == "responses":
+        return build_responses_request_fields(capability, effort=effort, thinking=native_thinking, max_tokens=max_tokens, thinking_budget=thinking_budget)
+    if _fake_reasoning_enabled() and capability.thinking.status is not CapabilityStatus.SUPPORTED:
+        # This deployment explicitly selected legacy text controls. No automatic
+        # native-to-text fallback is performed in the default configuration.
+        native_thinking, thinking_budget = None, None
+    return build_model_request_fields(
+        capability, effort=effort, thinking=native_thinking,
+        max_tokens=max_tokens, thinking_budget=thinking_budget,
+    )
 
 
 def build_placeholder_tool_specs(
@@ -1049,6 +815,9 @@ def build_kiro_payload(
     thinking_config: ThinkingConfig,
     max_tokens: Optional[int] = None,
     output_config: Optional[Any] = None,
+    identity: Optional[SessionIdentity] = None,
+    native_thinking: Optional[str] = None,
+    thinking_budget: Optional[int] = None,
 ) -> KiroPayloadResult:
     """
     Builds complete payload for Kiro API from unified data.
@@ -1081,6 +850,15 @@ def build_kiro_payload(
     Raises:
         ValueError: If there are no messages to send
     """
+    identity = identity or request_identity(conversation_id, None, messages, fallback_account=profile_arn)
+    state = current_state()
+    profile = configured_profile()
+    if state is not None:
+        state.protocol_profile = profile
+        state.wire_identity = identity
+        state.upstream_model_id = model_id
+        state.legacy_thinking = should_inject_thinking(thinking_config, model_id)
+
     # Process tools with long descriptions
     processed_tools, tool_documentation = process_tools_with_long_descriptions(tools)
     
@@ -1162,9 +940,9 @@ def build_kiro_payload(
 
     # System prompt as a separate leading user/assistant pair (stable prefix)
     system_prefix_entries = 0
-    if full_system_prompt:
+    if full_system_prompt and not profile.native_system_prompt:
         history = [
-            {"userInputMessage": {"content": full_system_prompt, "modelId": model_id, "origin": "AI_EDITOR"}},
+            {"userInputMessage": {"content": full_system_prompt, "modelId": model_id, "origin": configured_profile().origin}},
             {"assistantResponseMessage": {"content": SYSTEM_PROMPT_ACKNOWLEDGEMENT}},
         ] + history
         system_prefix_entries = 2
@@ -1198,7 +976,7 @@ def build_kiro_payload(
     user_input_message = {
         "content": current_content,
         "modelId": model_id,
-        "origin": "AI_EDITOR",
+        "origin": configured_profile().origin,
     }
     
     # Add images directly to userInputMessage (NOT to userInputMessageContext)
@@ -1209,19 +987,25 @@ def build_kiro_payload(
     if user_input_context:
         user_input_message["userInputMessageContext"] = user_input_context
     
-    # Assemble final payload
+    # Identity follows the explicit session/turn lifecycle, not tool presence.
+    identity = identity or request_identity(conversation_id, None, messages, fallback_account=profile_arn)
+    state = current_state()
     payload: Dict[str, Any] = {
+        "agentMode": state.agent_mode if state is not None else "vibe",
         "conversationState": {
-            "agentContinuationId": derive_agent_continuation_id(conversation_id),
+            "agentContinuationId": identity.continuation_id,
+            "rootConversationId": identity.root_conversation_id,
             "agentTaskType": determine_agent_task_type(tools),
             "chatTriggerType": "MANUAL",
-            "conversationId": conversation_id,
+            "conversationId": identity.conversation_id,
             "currentMessage": {
                 "userInputMessage": user_input_message
             }
         }
     }
     
+    if profile.native_system_prompt and full_system_prompt:
+        payload["systemPrompt"] = full_system_prompt
     # Add history only if not empty
     if history:
         payload["conversationState"]["history"] = history
@@ -1231,7 +1015,10 @@ def build_kiro_payload(
         payload["profileArn"] = profile_arn
 
     # Model-specific request fields (top level, next to conversationState)
-    additional_fields = build_additional_model_request_fields(model_id, max_tokens, output_config)
+    additional_fields = build_additional_model_request_fields(
+        model_id, max_tokens, output_config,
+        native_thinking=native_thinking, thinking_budget=thinking_budget,
+    )
     if additional_fields:
         payload["additionalModelRequestFields"] = additional_fields
 
@@ -1247,6 +1034,8 @@ def build_kiro_payload(
                 f"({stats.original_bytes} -> {stats.final_bytes} bytes)"
             )
 
+    if "history" in payload["conversationState"]:
+        payload["conversationState"]["history"] = _expand_native_history(payload["conversationState"]["history"])
     return KiroPayloadResult(payload=payload, tool_documentation=tool_documentation)
 
 
@@ -1254,9 +1043,8 @@ def build_kiro_payload(
 # Stable Conversation IDs (kiro/utils.py in the fork)
 # ==================================================================================================
 
-# Derive a stable Kiro conversationId per client conversation (metadata.user_id
-# session, else a hash of system + tools + first message) instead of a random UUID
-# per request. Lets Kiro reuse server-side conversation state / prompt cache.
+# Recognize explicit client session metadata. Anonymous requests remain independent;
+# content hashes are not reliable session identifiers.
 STABLE_CONVERSATION_ID: bool = _env_flag("STABLE_CONVERSATION_ID", "true")
 
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -1305,95 +1093,31 @@ def extract_session_id(user_id: Optional[str]) -> Optional[str]:
 
 
 def derive_conversation_id(
-    metadata: Optional[Dict[str, Any]],
-    system: Any = None,
-    tool_names: Optional[List[str]] = None,
-    first_message: Any = None,
+    metadata: Optional[Dict[str, Any]], system: Any = None,
+    tool_names: Optional[List[str]] = None, first_message: Any = None,
 ) -> str:
-    """
-    Derives a stable Kiro conversationId for a client conversation.
+    """Use a caller-provided session UUID, never a hash of conversation content.
 
-    Kiro can reuse server-side state across requests of the same conversation,
-    which a random ID per request defeats. Priority:
-    1. session UUID from metadata.user_id (Claude Code)
-    2. SHA-256 of system + sorted tool names + first message (first 4096 chars)
-
-    Args:
-        metadata: Anthropic request metadata
-        system: System prompt (str or list of blocks)
-        tool_names: Declared tool names
-        first_message: Content of the first message
-
-    Returns:
-        UUID-formatted conversation ID
+    Legacy positional arguments are accepted for compatibility but cannot create
+    a session identity. Anonymous requests receive independent random UUIDs.
     """
     user_id = metadata.get("user_id") if isinstance(metadata, dict) else None
-    session_id = extract_session_id(user_id)
-    if session_id:
-        return session_id
-
-    def _text(value: Any) -> str:
-        if value is None:
-            return ""
-        if isinstance(value, str):
-            return value
-        try:
-            return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
-        except (TypeError, ValueError):
-            return str(value)
-
-    # Claude Code's billing header line changes per request; keep it out of the hash
-    system_text = "\n".join(
-        line for line in _text(system).splitlines()
-        if "x-anthropic-billing-header" not in line
-    )
-    hasher = hashlib.sha256()
-    hasher.update(system_text.encode("utf-8"))
-    hasher.update(b"\x00")
-    hasher.update(",".join(sorted(tool_names or [])).encode("utf-8"))
-    hasher.update(b"\x00")
-    hasher.update(_text(first_message)[:4096].encode("utf-8"))
-    return str(uuid.UUID(bytes=hasher.digest()[:16], version=4))
-
-
-def _dump(value: Any) -> Any:
-    """Pydantic models -> plain data, so hashing is independent of model classes."""
-    if hasattr(value, "model_dump"):
-        return value.model_dump()
-    if isinstance(value, list):
-        return [_dump(v) for v in value]
-    return value
+    return extract_session_id(user_id) or str(uuid.uuid4())
 
 
 def stable_conversation_id_for_anthropic(request: Any) -> Optional[str]:
-    """Stable conversationId for an Anthropic request, or None when disabled."""
+    """Return only an explicit session, leaving anonymous request IDs independent."""
     if not STABLE_CONVERSATION_ID:
         return None
-    tool_names = [getattr(t, "name", "") or "" for t in (request.tools or [])]
-    first_message = _dump(request.messages[0].content) if request.messages else None
-    return derive_conversation_id(request.metadata, _dump(request.system), tool_names, first_message)
+    metadata = request.metadata
+    return extract_session_id(metadata.get("user_id")) if isinstance(metadata, dict) else None
 
 
 def stable_conversation_id_for_openai(request: Any) -> Optional[str]:
-    """Stable conversationId for an OpenAI chat request, or None when disabled.
-
-    Uses system messages + tool names + first non-system message, so every turn
-    of the same conversation maps to the same Kiro conversation.
-    """
+    """Recognize the supported explicit session form; never hash prompt/tools."""
     if not STABLE_CONVERSATION_ID:
         return None
-    messages = list(request.messages or [])
-    system = [_dump(m.content) for m in messages if getattr(m, "role", None) in ("system", "developer")]
-    first = next((_dump(m.content) for m in messages if getattr(m, "role", None) not in ("system", "developer")), None)
-    tool_names = []
-    for tool in request.tools or []:
-        function = getattr(tool, "function", None)
-        name = getattr(function, "name", None) if function is not None else getattr(tool, "name", None)
-        if name:
-            tool_names.append(name)
-    user = getattr(request, "user", None)
-    metadata = {"user_id": user} if isinstance(user, str) else None
-    return derive_conversation_id(metadata, system, tool_names, first)
+    return extract_session_id(getattr(request, "user", None))
 
 
 # ==================================================================================================
@@ -1424,15 +1148,9 @@ def extract_thinking_config_from_anthropic(request: Any) -> ThinkingConfig:
 
 
 def _reasoning_effort_to_output_config(request: Any) -> Optional[Dict[str, str]]:
-    """
-    Map OpenAI reasoning_effort to an output_config for additionalModelRequestFields.
-
-    Only low/medium/high are forwarded (values shared by Claude output_config.effort
-    and GPT reasoning.effort); other values fall back to the defaults.
-    """
-    if getattr(request, "reasoning_effort", None) in ("low", "medium", "high"):
-        return {"effort": request.reasoning_effort}
-    return None
+    """Pass every explicit effort through capability validation, including none/xhigh."""
+    effort = getattr(request, "reasoning_effort", None)
+    return {"effort": effort} if effort is not None else None
 
 
 _installed = False
@@ -1471,41 +1189,52 @@ def install_kiro_payload_builder() -> None:
     original_openai_build = converters_openai.build_kiro_payload
     original_openai_thinking = converters_openai.extract_thinking_config_from_openai
 
-    # Per-call extras the upstream adapters don't know how to pass along
-    # (max_tokens / output_config). Set by the adapter wrappers right before they
-    # call upstream, read by build_kiro_payload below. Plain module state is
-    # enough: conversion is synchronous, so no await can interleave two requests.
-    extras: Dict[str, Any] = {}
+    # Context-local converter metadata also isolates calls from worker threads.
+    extras: ContextVar[Optional[Dict[str, Any]]] = ContextVar("kiro_payload_extras", default=None)
 
     def build_kiro_payload_from_adapter(**kwargs):
-        kwargs.setdefault("max_tokens", extras.get("max_tokens"))
-        kwargs.setdefault("output_config", extras.get("output_config"))
+        options = extras.get() or {}
+        for name in ("max_tokens", "output_config", "identity", "native_thinking", "thinking_budget"):
+            kwargs.setdefault(name, options.get(name))
         return build_kiro_payload(**kwargs)
 
     def anthropic_to_kiro(request, conversation_id, profile_arn):
-        conversation_id = stable_conversation_id_for_anthropic(request) or conversation_id
-        extras.clear()
-        extras.update(
-            max_tokens=request.max_tokens,
-            # output_config is not a declared field; it arrives via model_config extra="allow"
-            output_config=getattr(request, "output_config", None),
-        )
+        request = _prepare_native_history(request, anthropic=True)
+        explicit_session = stable_conversation_id_for_anthropic(request)
+        identity = request_identity(conversation_id, explicit_session, request.messages, fallback_account=profile_arn)
+        thinking = request.thinking
+        if thinking is not None:
+            if not isinstance(thinking, dict) or set(thinking) - {"type", "budget_tokens"}:
+                raise ValueError("thinking accepts type and budget_tokens; unsupported fields cannot be discarded")
+            if thinking.get("type") not in ("enabled", "disabled", "adaptive"):
+                raise ValueError("thinking.type must be enabled, disabled, or adaptive")
+            if "budget_tokens" in thinking and (type(thinking["budget_tokens"]) is not int or thinking["budget_tokens"] <= 0):
+                raise ValueError("thinking.budget_tokens must be a positive integer")
+        token = extras.set({
+            "native_thinking": thinking.get("type") if thinking is not None else None,
+            "thinking_budget": thinking.get("budget_tokens") if thinking is not None else None,
+            "max_tokens": request.max_tokens,
+            "output_config": getattr(request, "output_config", None),
+            "identity": identity,
+        })
         try:
-            return original_anthropic_to_kiro(request, conversation_id, profile_arn)
+            return original_anthropic_to_kiro(request, identity.conversation_id, profile_arn)
         finally:
-            extras.clear()
+            extras.reset(token)
 
     def openai_build_kiro_payload(request_data, conversation_id, profile_arn):
-        conversation_id = stable_conversation_id_for_openai(request_data) or conversation_id
-        extras.clear()
-        extras.update(
-            max_tokens=request_data.max_tokens or request_data.max_completion_tokens,
-            output_config=_reasoning_effort_to_output_config(request_data),
-        )
+        request_data = _prepare_native_history(request_data, anthropic=False)
+        explicit_session = stable_conversation_id_for_openai(request_data)
+        identity = request_identity(conversation_id, explicit_session, request_data.messages, fallback_account=profile_arn)
+        token = extras.set({
+            "max_tokens": request_data.max_completion_tokens if request_data.max_completion_tokens is not None else request_data.max_tokens,
+            "output_config": _reasoning_effort_to_output_config(request_data),
+            "identity": identity,
+        })
         try:
-            return original_openai_build(request_data, conversation_id, profile_arn)
+            return original_openai_build(request_data, identity.conversation_id, profile_arn)
         finally:
-            extras.clear()
+            extras.reset(token)
 
     def extract_thinking_config_from_openai(request):
         if not request.reasoning_effort:

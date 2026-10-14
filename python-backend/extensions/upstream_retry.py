@@ -1,41 +1,20 @@
-"""
-Kiro upstream connection hardening, ported from the kiro-gateway fork (61d9b68, dc0fe43).
+"""Bounded Kiro transport recovery without silently changing client intent.
 
-Replaces KiroHttpClient.request_with_retry at runtime (kiro/ stays zero-diff):
-
-- 5xx / 408 / network errors: capped exponential backoff with +/-25% jitter
-  (MAX_RETRY_DELAY) instead of uncapped 1s/2s/4s. 408 is now retried.
-- 429: linear backoff + jitter (THROTTLE_BASE_DELAY / THROTTLE_STEP_DELAY /
-  THROTTLE_MAX_DELAY), honouring Retry-After. No pointless sleep after the
-  last attempt.
-- Optional endpoint rotation on 429 (KIRO_ENDPOINTS, e.g. "runtime,ide"): each
-  endpoint is reported to have its own rate-limit bucket, so a throttled one is
-  parked for ENDPOINT_THROTTLE_SECONDS and the next one is tried immediately.
-- amz-sdk-request reports the real attempt number; x-amzn-kiro-agent-mode
-  follows the payload's agentTaskType (set by kiro_payload_builder).
-- When Kiro rejects additionalModelRequestFields with a 400, the field is
-  stripped and the request retried once. Only "not supported" is remembered per
-  model; a rejected *value* (e.g. an unknown effort) affects that request only.
-
-Differences from the fork, for KiroaaS:
-- The URL the route asked for is always the first candidate, sent with the
-  exact upstream headers. chat_host_fallback points profile-less accounts at
-  q.{region}.amazonaws.com; the fork would have rewritten that to runtime, which
-  400s without a profileArn. Rotation targets are only added from KIRO_ENDPOINTS
-  (default "runtime" = no rotation), and runtime is skipped for such accounts.
-- With KiroaaS Cloud on, endpoints the cloud connector cannot tunnel
-  (codewhisperer.*) are skipped so traffic never silently bypasses it.
-
-Also records the last non-200 upstream status in the request state, which the
-client_compat extension uses to map errors for Anthropic clients.
+All inference sends share a middleware request budget. Authentication recovery
+requires an actual token error, abandoned responses are drained and closed, and
+429 retries honor Kiro/HTTP hints without assuming independent endpoint quotas.
+Explicit legacy additional-field fallback is opt-in and scoped with a TTL.
 """
 
 import asyncio
+import uuid
+from collections import OrderedDict
 import json
+import math
 import os
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -43,6 +22,9 @@ from fastapi import HTTPException
 from loguru import logger
 
 from extensions.request_context import current_state
+from extensions.protocol_runtime import configured_profile, identify_operation, prepare_operation, GENERATION_OPERATIONS, CONTROL_OPERATIONS
+from extensions.responses_transport import adapt_responses_stream
+from extensions.retry_policy import RetryBudget, is_expired_auth, refresh_if_current, retry_after_seconds
 
 
 # ==================================================================================================
@@ -51,10 +33,13 @@ from extensions.request_context import current_state
 
 def _env_float(name: str, default: str) -> float:
     try:
-        return float(os.getenv(name, default))
+        value = float(os.getenv(name, default))
+        if math.isfinite(value) and value >= 0:
+            return value
     except ValueError:
-        logger.warning(f"Invalid {name}={os.getenv(name)!r}, using {default}")
-        return float(default)
+        pass
+    logger.warning(f"Invalid {name}; using {default}")
+    return float(default)
 
 
 # Upper bound for exponential backoff on 5xx/408/network errors (seconds)
@@ -66,7 +51,7 @@ THROTTLE_BASE_DELAY: float = _env_float("THROTTLE_BASE_DELAY", "2")
 THROTTLE_STEP_DELAY: float = _env_float("THROTTLE_STEP_DELAY", "1")
 THROTTLE_MAX_DELAY: float = _env_float("THROTTLE_MAX_DELAY", "8")
 
-# Kiro upstream endpoints for generateAssistantResponse, tried in order on 429.
+# Explicit compatibility endpoints, tried only for an unsupported operation.
 #   runtime       -> runtime.{region}.kiro.dev (default, the only one enabled by default)
 #   ide           -> q.{region}.amazonaws.com
 #   codewhisperer -> codewhisperer.us-east-1.amazonaws.com (q.{region} elsewhere) + x-amz-target
@@ -238,20 +223,24 @@ def backoff_delay(attempt: int) -> float:
 
 
 def throttle_delay(attempt: int, retry_after: Optional[str] = None) -> float:
-    """Backoff for 429: linear growth with jitter; honours Retry-After if present."""
-    if retry_after:
-        try:
-            return min(max(float(retry_after), 0.0), THROTTLE_MAX_DELAY)
-        except ValueError:
-            pass
+    """Backoff for 429, accepting numeric seconds and HTTP-date retry hints."""
+    hint = retry_after_seconds({"retry-after": retry_after}) if retry_after is not None else None
+    if hint is not None:
+        return hint
     base = min(THROTTLE_BASE_DELAY + attempt * THROTTLE_STEP_DELAY, THROTTLE_MAX_DELAY)
-    return base + random.uniform(0.0, 1.5)
+    return min(max(0.0, base + random.uniform(0.0, 1.5)), THROTTLE_MAX_DELAY)
 
 
-# Models for which Kiro rejected additionalModelRequestFields (learned at runtime)
-_ADDITIONAL_FIELDS_REJECTED: set = set()
-
+# Optional compatibility decisions must never leak between accounts/endpoints.
+_ADDITIONAL_FIELDS_REJECTED: OrderedDict = OrderedDict()
 ADDITIONAL_FIELDS_KEY = "additionalModelRequestFields"
+_REJECTION_CACHE_TTL = 300.0
+_REJECTION_CACHE_LIMIT = 256
+
+
+def _allow_field_fallback() -> bool:
+    """Explicitly opt into dropping unsupported additional fields (off by default)."""
+    return os.getenv("KIRO_ALLOW_ADDITIONAL_FIELDS_FALLBACK", "false").lower() in ("true", "1", "yes")
 
 
 def _payload_model_id(json_data: Optional[dict]) -> Optional[str]:
@@ -262,38 +251,60 @@ def _payload_model_id(json_data: Optional[dict]) -> Optional[str]:
         return None
 
 
-def strip_rejected_additional_fields(json_data: Optional[dict]) -> Optional[dict]:
-    """Drops additionalModelRequestFields for models Kiro already rejected it for."""
-    if isinstance(json_data, dict) and ADDITIONAL_FIELDS_KEY in json_data:
-        if _payload_model_id(json_data) in _ADDITIONAL_FIELDS_REJECTED:
-            return {k: v for k, v in json_data.items() if k != ADDITIONAL_FIELDS_KEY}
+def strip_rejected_additional_fields(
+    json_data: Optional[dict], scope: Optional[Tuple[str, str]] = None
+) -> Optional[dict]:
+    """Apply only explicit, unexpired account/endpoint-scoped compatibility choices."""
+    if not _allow_field_fallback() or scope is None or not isinstance(json_data, dict):
+        return json_data
+    now = time.monotonic()
+    for key, until in list(_ADDITIONAL_FIELDS_REJECTED.items()):
+        if until <= now:
+            _ADDITIONAL_FIELDS_REJECTED.pop(key, None)
+    key = (*scope, _payload_model_id(json_data))
+    if key in _ADDITIONAL_FIELDS_REJECTED:
+        logger.warning("Applying explicitly enabled unsupported-model-field fallback")
+        return {k: v for k, v in json_data.items() if k != ADDITIONAL_FIELDS_KEY}
     return json_data
 
 
 def agent_mode_for_payload(json_data: Optional[dict]) -> str:
-    """x-amzn-kiro-agent-mode from the payload's agentTaskType ("spectask" or "vibe")."""
+    """Read the command's independent agent mode; task type and tools do not imply it."""
     if isinstance(json_data, dict):
-        task_type = (json_data.get("conversationState") or {}).get("agentTaskType")
-        if task_type == "spectask":
-            return "spectask"
+        mode = json_data.get("agentMode")
+        if isinstance(mode, str) and mode.strip():
+            return mode
     return "vibe"
 
 
-def build_headers(auth_manager: Any, token: str, endpoint: Endpoint, attempt: int, agent_mode: str) -> dict:
-    """
-    Upstream get_kiro_headers(), adjusted per endpoint and attempt.
+def build_headers(
+    auth_manager: Any, token: str, endpoint: Endpoint, attempt: int,
+    agent_mode: str, *, invocation_id: Optional[str] = None, max_attempts: int = 3,
+) -> dict:
+    """Build coherent correlation/attempt headers for one physical send.
 
-    Looked up through kiro.http_client so any other patch of get_kiro_headers applies.
+    Args:
+        auth_manager: Account authentication manager.
+        token: Current access token, never logged.
+        endpoint: Explicit selected transport endpoint.
+        attempt: Physical attempt within the logical request.
+        agent_mode: Independent execution mode, not the task type.
+        invocation_id: Stable logical request ID.
+        max_attempts: The actual shared send budget.
     """
-    import kiro.http_client as http_client_module
-
-    headers = http_client_module.get_kiro_headers(auth_manager, token)
-    if endpoint.amz_target:
-        headers["x-amz-target"] = endpoint.amz_target
-    else:
-        headers.pop("x-amz-target", None)
-    headers["amz-sdk-request"] = f"attempt={attempt}; max=3"
-    headers["x-amzn-kiro-agent-mode"] = agent_mode
+    profile = configured_profile(auth_manager)
+    from kiro.client_identity import application_version
+    from extensions.protocol_runtime import auth_method
+    headers = profile.build_headers(app_version=application_version(), token=token, auth_method=auth_method(auth_manager))
+    if profile.name == "legacy" and profile.generation_protocol == "generate":
+        if endpoint.amz_target:
+            headers["x-amz-target"] = endpoint.amz_target
+        else:
+            headers.pop("x-amz-target", None)
+        headers["x-amzn-kiro-agent-mode"] = agent_mode
+    headers["amz-sdk-invocation-id"] = invocation_id or str(uuid.uuid4())
+    headers["amz-sdk-request"] = f"attempt={attempt}; max={max_attempts}"
+    headers["x-kiro-attempt"] = f"{attempt};max={max_attempts}"
     return headers
 
 
@@ -314,198 +325,272 @@ def _record_upstream_status(status_code: int) -> None:
 # request_with_retry
 # ==================================================================================================
 
+async def _read_error(response: httpx.Response, budget: RetryBudget) -> bytes:
+    """Buffer an error for classification and release its connection on all paths."""
+    try:
+        return await budget.wait(response.aread())
+    finally:
+        await response.aclose()
+
+
+def _compatibility_scope(auth: Any, endpoint: Endpoint) -> Tuple[str, str]:
+    """Give an auth object a non-reusable cache namespace, including wire dialect."""
+    from extensions.upstream_account import credential_generation
+    namespace = getattr(auth, "_kiro_compatibility_namespace", None)
+    if not isinstance(namespace, str):
+        namespace = str(uuid.uuid4())
+        setattr(auth, "_kiro_compatibility_namespace", namespace)
+    return namespace + ":" + (credential_generation(auth) or ""), endpoint.base_url + "|" + (endpoint.amz_target or "")
+
+
+def _remember_field_rejection(scope: Tuple[str, str], payload: dict) -> None:
+    """Bound the opt-in compatibility cache and isolate endpoint/account decisions."""
+    key = (*scope, _payload_model_id(payload))
+    _ADDITIONAL_FIELDS_REJECTED[key] = time.monotonic() + _REJECTION_CACHE_TTL
+    _ADDITIONAL_FIELDS_REJECTED.move_to_end(key)
+    while len(_ADDITIONAL_FIELDS_REJECTED) > _REJECTION_CACHE_LIMIT:
+        _ADDITIONAL_FIELDS_REJECTED.popitem(last=False)
+
+
+def _unsupported_additional_fields(body: bytes) -> bool:
+    """Recognize rejection of the field itself, not a bad effort/token-limit value."""
+    text = body.lower()
+    return any(marker in text for marker in (
+        b"additionalmodelrequestfields is not supported",
+        b"additionalmodelrequestfields are not supported",
+        b"unsupported field: additionalmodelrequestfields",
+    ))
+
+
 async def request_with_retry(
-    self,
-    method: str,
-    url: str,
-    json_data: Optional[dict] = None,
-    params: Optional[dict] = None,
-    stream: bool = False
+    self: Any, method: str, url: str, json_data: Optional[dict] = None,
+    params: Optional[dict] = None, stream: bool = False, operation: Optional[str] = None,
+    _paginate: bool = True, _profile_override: Any = None, _deadline: Optional[float] = None,
 ) -> httpx.Response:
-    """
-    Executes an HTTP request with retry logic (replaces KiroHttpClient.request_with_retry).
+    """Send with bounded, error-aware recovery and no implicit content modification.
 
-    - 403: refreshes token via auth_manager.force_refresh() and retries
-    - 429: rotates to the next configured endpoint (KIRO_ENDPOINTS), otherwise
-      waits with linear backoff + jitter (Retry-After honoured)
-    - 408/5xx: waits with capped exponential backoff + jitter
-    - 400 rejecting additionalModelRequestFields: strips it and retries
-    - Timeouts / network errors: capped exponential backoff + jitter
-
-    Returns:
-        httpx.Response (200, or the last 429/5xx/4xx for the caller to classify)
-
-    Raises:
-        HTTPException: On network failure after all attempts (502/504)
+    A middleware budget spans nested retries/account failover. Standalone calls
+    receive a local budget. Successful streams are owned by the caller; every
+    error response is buffered and closed before being returned or retried.
     """
     from kiro.config import MAX_RETRIES, FIRST_TOKEN_MAX_RETRIES
     import kiro.http_client as http_client_module
 
-    classify_network_error = http_client_module.classify_network_error
-    get_short_error_message = http_client_module.get_short_error_message
-
-    max_retries = FIRST_TOKEN_MAX_RETRIES if stream else MAX_RETRIES
-
+    try:
+        kind = identify_operation(url, json_data, operation)
+        request_state = current_state()
+        profile = _profile_override or (request_state.protocol_profile if (kind in GENERATION_OPERATIONS and request_state is not None and request_state.protocol_profile is not None) else configured_profile(self.auth_manager))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    inference = kind in GENERATION_OPERATIONS
+    local_limit = max(1, FIRST_TOKEN_MAX_RETRIES if stream and inference else MAX_RETRIES)
+    state = current_state()
+    budget = state.retry_budget if state is not None and inference else None
+    if budget is None:
+        budget = RetryBudget.from_environment(local_limit)
+        if state is not None and state.retry_budget is not None:
+            budget.deadline = min(budget.deadline, state.retry_budget.deadline)
+    if _deadline is not None:
+        budget.deadline = min(budget.deadline, _deadline)
     client = await self._get_client(stream=stream)
-    last_error_info = None
-    last_response: Optional[httpx.Response] = None  # last 429/5xx, returned after exhaustion
-
-    json_data = strip_rejected_additional_fields(json_data)
-    has_profile_arn = bool(getattr(self.auth_manager, "_profile_arn", None) or getattr(self.auth_manager, "profile_arn", None))
-    endpoints = endpoint_candidates(url, has_profile_arn=has_profile_arn)
+    has_profile = bool(getattr(self.auth_manager, "_profile_arn", None) or getattr(self.auth_manager, "profile_arn", None))
+    endpoints = endpoint_candidates(url, has_profile_arn=has_profile)
+    if profile.name != "legacy" or profile.generation_protocol != "generate" or not inference:
+        endpoints = endpoints[:1]
+    control_fallback_used = False
+    endpoint_index = 0
     account_key = id(self.auth_manager)
-    agent_mode = agent_mode_for_payload(json_data)
+    mode = agent_mode_for_payload(json_data)
+    last_response: Optional[httpx.Response] = None
+    last_error_info = None
+    delay = 0.0
 
-    attempt = 0
-    while attempt < max_retries:
-        # Advanced at the end of every pass except the free additionalModelRequestFields
-        # retry below (which can happen at most once: the field is gone afterwards).
-        consumes_attempt = True
+    for local_attempt in range(local_limit):
+        if not budget.can_retry(delay):
+            if last_response is not None:
+                return last_response
+            if budget.last_http_error is not None:
+                status, saved_headers, saved_body = budget.last_http_error
+                _record_upstream_status(status)
+                return httpx.Response(status, headers=saved_headers, content=saved_body)
+            raise HTTPException(status_code=504, detail="Kiro request cannot be replayed: output started or shared budget exhausted.")
         try:
-            # Rotate across endpoints: throttled buckets are moved to the back
-            endpoint = endpoint_registry.order(account_key, endpoints)[0]
+            if delay:
+                await budget.wait(asyncio.sleep(delay))
+            endpoint = endpoints[endpoint_index]
             request_url = url if endpoint.name == "requested" else endpoint.url
-
-            token = await self.auth_manager.get_access_token()
-            headers = build_headers(self.auth_manager, token, endpoint, attempt + 1, agent_mode)
-
-            request_kwargs: Dict[str, Any] = {"headers": headers}
-            if json_data is not None:
-                request_kwargs["content"] = json.dumps(json_data).encode()
-            if params is not None:
-                request_kwargs["params"] = params
-
+            token = await budget.wait(self.auth_manager.get_access_token())
+            payload = json_data
+            try:
+                prepared = prepare_operation(
+                    self.auth_manager, token, method, request_url, payload, params,
+                    operation=kind, legacy_target=endpoint.amz_target, profile_override=profile,
+                )
+                actual_endpoint = Endpoint(prepared.operation or "unknown", prepared.url, prepared.headers.get("x-amz-target"))
+                scope = _compatibility_scope(self.auth_manager, actual_endpoint)
+                payload = strip_rejected_additional_fields(json_data, scope)
+                if payload is not json_data:
+                    prepared = prepare_operation(
+                        self.auth_manager, token, method, request_url, payload, params,
+                        operation=kind, legacy_target=endpoint.amz_target, profile_override=profile,
+                    )
+                from extensions.cloud_connector import require_cloud_route
+                require_cloud_route(prepared.url)
+                content = None if prepared.payload is None else json.dumps(
+                    prepared.payload, ensure_ascii=False, separators=(",", ":")
+                ).encode("utf-8")
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            # Validation/translation does not spend a physical-send attempt.
+            attempt = budget.reserve_attempt()
+            headers = prepared.headers
+            headers["amz-sdk-invocation-id"] = budget.invocation_id
+            headers["amz-sdk-request"] = f"attempt={attempt}; max={budget.max_attempts}"
+            headers["x-kiro-attempt"] = f"{attempt};max={budget.max_attempts}"
+            kwargs: Dict[str, Any] = {"headers": headers, "extensions": {"kiro_upstream": True}}
+            if content is not None:
+                kwargs["content"] = content
+            if prepared.params is not None:
+                kwargs["params"] = prepared.params
             if stream:
-                # Prevent CLOSE_WAIT connection leak (issue #38)
                 headers["Connection"] = "close"
-                req = client.build_request(method, request_url, **request_kwargs)
-                logger.debug(f"Sending request to Kiro API ({endpoint.name})...")
-                response = await client.send(req, stream=True)
+                request = client.build_request(prepared.method, prepared.url, **kwargs)
+                response = await budget.wait(client.send(request, stream=True, follow_redirects=False))
             else:
-                logger.debug(f"Sending request to Kiro API ({endpoint.name})...")
-                response = await client.request(method, request_url, **request_kwargs)
-
+                response = await budget.wait(client.request(prepared.method, prepared.url, follow_redirects=False, **kwargs))
             if response.status_code == 200:
+                if isinstance(getattr(response, "extensions", None), dict):
+                    response.extensions["kiro_request_deadline"] = budget.deadline
+                    stream_limit = _env_float("KIRO_STREAM_TOTAL_TIMEOUT", "0")
+                    if stream_limit > 0:
+                        response.extensions["kiro_stream_deadline"] = time.monotonic() + stream_limit
+                budget.last_http_error = None
+                if state is not None:
+                    state.upstream_status = None
+                    state.upstream_reason = None
+                if kind == "ListAvailableModels" and _paginate:
+                    response = await _collect_model_pages(self, response, method, url, json_data, params, profile, budget.deadline)
+                return adapt_responses_stream(response) if prepared.is_responses else response
+
+            _record_upstream_status(response.status_code)
+            try:
+                body = await _read_error(response, budget)
+            except (httpx.RequestError, httpx.StreamError, asyncio.TimeoutError):
+                # Keep an observed HTTP error even if its diagnostic body was lost.
+                body = b'{"message":"Kiro returned an error; its response body could not be read."}'
+                response = httpx.Response(response.status_code, headers=response.headers, content=body)
+                budget.last_http_error = (response.status_code, dict(response.headers), body)
+                return response
+            last_response = response
+            budget.last_http_error = (response.status_code, dict(response.headers), body)
+            if local_attempt + 1 >= local_limit or not budget.can_retry():
                 return response
 
-            # 403 - token expired, refresh and retry
-            if response.status_code == 403:
-                logger.warning(f"Received 403, refreshing token (attempt {attempt + 1}/{max_retries})")
-                await self.auth_manager.force_refresh()
+            if is_expired_auth(response.status_code, body):
+                if account_key in budget.refreshed_accounts:
+                    return response
+                budget.refreshed_accounts.add(account_key)
+                await budget.wait(refresh_if_current(self.auth_manager, token))
+                delay = 0.0
                 continue
-
-            # 429 - rate limit: mark endpoint bucket, rotate, back off
             if response.status_code == 429:
-                last_response = response
-                if len(endpoints) > 1:
-                    endpoint_registry.throttle(account_key, endpoint.name)
-                retry_after = None
-                resp_headers = getattr(response, "headers", None)
-                if isinstance(resp_headers, (dict, httpx.Headers)):
-                    retry_after = resp_headers.get("retry-after")
-                # Other endpoints are separate buckets: switch without waiting
-                free_left = len(endpoints) > 1 and any(
-                    not endpoint_registry.is_throttled(account_key, e.name) for e in endpoints
-                )
-                if free_left:
-                    logger.warning(
-                        f"Received 429 on '{endpoint.name}', switching endpoint "
-                        f"(attempt {attempt + 1}/{max_retries})"
-                    )
-                    continue
-                if attempt < max_retries - 1:
-                    delay = throttle_delay(attempt, retry_after)
-                    logger.warning(f"Received 429, waiting {delay:.1f}s (attempt {attempt + 1}/{max_retries})")
-                    await asyncio.sleep(delay)
+                hint = retry_after_seconds(response.headers, body)
+                delay = hint if hint is not None else throttle_delay(local_attempt)
+                # No rotation: the server has not promised independent quotas.
                 continue
-
-            # 408 / 5xx - transient server error, wait and retry
             if response.status_code == 408 or 500 <= response.status_code < 600:
-                last_response = response
-                if attempt < max_retries - 1:
-                    delay = backoff_delay(attempt)
-                    logger.warning(
-                        f"Received {response.status_code}, waiting {delay:.1f}s "
-                        f"(attempt {attempt + 1}/{max_retries})"
-                    )
-                    await asyncio.sleep(delay)
+                hint = retry_after_seconds(response.headers, body)
+                delay = hint if hint is not None else backoff_delay(local_attempt)
                 continue
-
-            # 400 because this model doesn't accept additionalModelRequestFields:
-            # strip the field and retry
             if (
-                response.status_code == 400
-                and isinstance(json_data, dict)
-                and ADDITIONAL_FIELDS_KEY in json_data
+                response.status_code in (400, 404) and b"unknownoperation" in body.lower()
+                and kind in CONTROL_OPERATIONS and profile.name == "cli" and not control_fallback_used
+                and os.getenv("KIRO_CONTROL_PLANE_FALLBACK", "false").lower() in ("true", "1", "yes")
             ):
-                body = await response.aread()
-                if ADDITIONAL_FIELDS_KEY.encode() in body:
-                    model_id = _payload_model_id(json_data)
-                    # Remember the model only when the field itself is unsupported;
-                    # a rejected value (e.g. an unknown effort) affects this request only.
-                    if model_id and b"not supported" in body.lower():
-                        _ADDITIONAL_FIELDS_REJECTED.add(model_id)
-                    logger.warning(
-                        f"Kiro rejected {ADDITIONAL_FIELDS_KEY} for model '{model_id}': "
-                        f"{body[:200].decode('utf-8', errors='replace')} - retrying without it"
-                    )
-                    await response.aclose()
-                    json_data = {k: v for k, v in json_data.items() if k != ADDITIONAL_FIELDS_KEY}
-                    consumes_attempt = False
-                    continue
-
-            # Other errors - return as is
-            _record_upstream_status(response.status_code)
+                profile = replace(profile, name="legacy", generation_protocol="generate")
+                control_fallback_used = True
+                delay = 0.0
+                continue
+            if (
+                response.status_code in (400, 404)
+                and b"unknownoperation" in body.lower()
+                and endpoint_index + 1 < len(endpoints)
+            ):
+                endpoint_index += 1
+                delay = 0.0
+                continue
+            if (
+                response.status_code == 400 and _allow_field_fallback()
+                and isinstance(payload, dict) and ADDITIONAL_FIELDS_KEY in payload
+                and _unsupported_additional_fields(body)
+            ):
+                _remember_field_rejection(scope, payload)
+                json_data = {k: v for k, v in payload.items() if k != ADDITIONAL_FIELDS_KEY}
+                logger.warning("Retrying without additional model fields under explicit compatibility opt-in")
+                delay = 0.0
+                continue
             return response
+        except ValueError as error:
+            from extensions.protocol_runtime import require_credential_binding
+            require_credential_binding(self.auth_manager)
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except (httpx.TimeoutException, httpx.RequestError) as error:
+            last_error_info = http_client_module.classify_network_error(error)
+            if not last_error_info.is_retryable:
+                break
+            delay = backoff_delay(local_attempt)
+        except asyncio.TimeoutError:
+            if last_response is not None:
+                return last_response
+            raise HTTPException(status_code=504, detail="Kiro request exceeded its total elapsed-time budget.") from None
 
-        except (httpx.TimeoutException, httpx.RequestError) as e:
-            error_info = classify_network_error(e)
-            last_error_info = error_info
-            short_msg = get_short_error_message(error_info)
-
-            if error_info.is_retryable and attempt < max_retries - 1:
-                delay = backoff_delay(attempt)
-                logger.warning(f"{short_msg} - waiting {delay:.1f}s (attempt {attempt + 1}/{max_retries})")
-                await asyncio.sleep(delay)
-            else:
-                logger.error(f"{short_msg} - no more retries (attempt {attempt + 1}/{max_retries})")
-                if not error_info.is_retryable:
-                    break
-        finally:
-            if consumes_attempt:
-                attempt += 1
-
-    # 429/5xx retries exhausted: return the response so the caller sees the real status
     if last_response is not None:
-        logger.warning(
-            f"Retries exhausted for HTTP {last_response.status_code}, "
-            f"returning response to caller for classification"
-        )
-        _record_upstream_status(last_response.status_code)
         return last_response
+    if last_error_info is not None:
+        raise HTTPException(status_code=last_error_info.suggested_http_code, detail=last_error_info.user_message)
+    raise HTTPException(status_code=504, detail="Kiro request exhausted its total inference attempt budget.")
 
-    if last_error_info:
-        error_message = last_error_info.user_message
-        if last_error_info.troubleshooting_steps:
-            error_message += "\n\nTroubleshooting:\n"
-            for i, step in enumerate(last_error_info.troubleshooting_steps, 1):
-                error_message += f"{i}. {step}\n"
-        error_message += f"\nTechnical details: {last_error_info.technical_details}"
-        raise HTTPException(
-            status_code=last_error_info.suggested_http_code,
-            detail=error_message.strip()
-        )
 
-    if stream:
-        raise HTTPException(
-            status_code=504,
-            detail=f"Streaming failed after {max_retries} attempts. Unknown error."
-        )
-    raise HTTPException(
-        status_code=502,
-        detail=f"Request failed after {max_retries} attempts. Unknown error."
-    )
 
+async def _collect_model_pages(
+    owner: Any, first: httpx.Response, method: str, url: str, payload: Optional[dict],
+    params: Optional[dict], profile: Any, deadline: float,
+) -> httpx.Response:
+    """Collect a bounded complete discovery snapshot, never silently a first page."""
+    try:
+        data = first.json()
+    except ValueError as error:
+        raise HTTPException(502, "Kiro model discovery returned invalid JSON") from error
+    if not isinstance(data, dict) or not data.get("nextToken"):
+        return first
+    models = data.get("models")
+    if not isinstance(models, list):
+        raise HTTPException(502, "Kiro model discovery returned an invalid models list")
+    models = list(models)
+    cursor, seen = data.get("nextToken"), set()
+    for _ in range(9):
+        if not isinstance(cursor, str) or cursor in seen:
+            raise HTTPException(502, "Kiro model discovery returned an invalid/repeated cursor")
+        seen.add(cursor)
+        query = {**(params or {}), "nextToken": cursor}
+        page = await request_with_retry(owner, method, url, payload, query, operation="ListAvailableModels",
+                                        _paginate=False, _profile_override=profile, _deadline=deadline)
+        if page.status_code != 200:
+            return page
+        try:
+            parsed = page.json()
+        except ValueError as error:
+            raise HTTPException(502, "Kiro model discovery returned invalid JSON") from error
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("models"), list):
+            raise HTTPException(502, "Kiro model discovery returned an invalid page")
+        models.extend(parsed["models"])
+        cursor = parsed.get("nextToken")
+        if not cursor:
+            combined = {**data, "models": models}
+            combined.pop("nextToken", None)
+            return httpx.Response(200, json=combined, headers={key: value for key, value in first.headers.items()
+                                  if key.lower() not in ("content-length", "content-encoding")})
+    raise HTTPException(502, "Kiro model discovery exceeded its ten-page safety limit")
 
 _installed = False
 _originals: Dict[str, Any] = {}
@@ -526,7 +611,7 @@ def install_upstream_retry() -> None:
     extra = [e.name for e in endpoint_candidates("https://runtime.us-east-1.kiro.dev" + GENERATE_PATH)[1:]]
     logger.info(
         "Installed upstream retry extension"
-        + (f" (429 rotation to: {', '.join(extra)})" if extra else "")
+        + (f" (explicit compatibility alternatives: {', '.join(extra)})" if extra else "")
     )
 
 
@@ -539,6 +624,7 @@ def uninstall_upstream_retry() -> None:
         KiroHttpClient.request_with_retry = _originals["request_with_retry"]
 
     _originals.clear()
+    _ADDITIONAL_FIELDS_REJECTED.clear()
     endpoint_registry.clear()
     _ADDITIONAL_FIELDS_REJECTED.clear()
     _installed = False

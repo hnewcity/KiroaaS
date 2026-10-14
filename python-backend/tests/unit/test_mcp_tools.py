@@ -13,6 +13,7 @@ Tests cover:
 """
 
 import json
+import httpx
 import pytest
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 from datetime import datetime
@@ -31,6 +32,11 @@ from kiro.mcp_tools import (
 # ==================================================================================================
 # Tests for ID Generation
 # ==================================================================================================
+
+@pytest.fixture(autouse=True)
+def no_retry_sleeps(monkeypatch):
+    monkeypatch.setattr("extensions.upstream_retry.asyncio.sleep", AsyncMock())
+
 
 class TestIDGeneration:
     """Tests for random ID generation."""
@@ -125,13 +131,13 @@ class TestCallKiroMCPAPI:
         }
         
         # Mock httpx.AsyncClient - CRITICAL: json() must be async
-        mock_response = Mock()
+        mock_response = httpx.Response(200, content=b"{}")
         mock_response.status_code = 200
         mock_response.json = Mock(return_value=mock_response_data)
         
         mock_post = AsyncMock(return_value=mock_response)
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value.post = mock_post
+        mock_client.__aenter__.return_value.request = mock_post
         
         print("Action: Calling call_kiro_mcp_api...")
         with patch("kiro.mcp_tools.httpx.AsyncClient", return_value=mock_client):
@@ -163,13 +169,13 @@ class TestCallKiroMCPAPI:
             "error": {"code": -32600, "message": "Invalid request"}
         }
         
-        mock_response = Mock()
+        mock_response = httpx.Response(200, content=b"{}")
         mock_response.status_code = 200
         mock_response.json = Mock(return_value=mock_response_data)
         
         mock_post = AsyncMock(return_value=mock_response)
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value.post = mock_post
+        mock_client.__aenter__.return_value.request = mock_post
         
         print("Action: Calling call_kiro_mcp_api...")
         with patch("kiro.mcp_tools.httpx.AsyncClient", return_value=mock_client):
@@ -188,12 +194,12 @@ class TestCallKiroMCPAPI:
         print("Setup: Mocking HTTP 500 error...")
         query = "test"
         
-        mock_response = Mock()
+        mock_response = httpx.Response(200, content=b"{}")
         mock_response.status_code = 500
         
         mock_post = AsyncMock(return_value=mock_response)
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value.post = mock_post
+        mock_client.__aenter__.return_value.request = mock_post
         
         print("Action: Calling call_kiro_mcp_api...")
         with patch("kiro.mcp_tools.httpx.AsyncClient", return_value=mock_client):
@@ -216,7 +222,7 @@ class TestCallKiroMCPAPI:
         
         mock_post = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value.post = mock_post
+        mock_client.__aenter__.return_value.request = mock_post
         
         print("Action: Calling call_kiro_mcp_api...")
         with patch("kiro.mcp_tools.httpx.AsyncClient", return_value=mock_client):
@@ -235,13 +241,13 @@ class TestCallKiroMCPAPI:
         print("Setup: Mocking malformed JSON response...")
         query = "test"
         
-        mock_response = Mock()
+        mock_response = httpx.Response(200, content=b"{}")
         mock_response.status_code = 200
         mock_response.json = Mock(side_effect=json.JSONDecodeError("Invalid JSON", "", 0))
         
         mock_post = AsyncMock(return_value=mock_response)
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value.post = mock_post
+        mock_client.__aenter__.return_value.request = mock_post
         
         print("Action: Calling call_kiro_mcp_api...")
         with patch("kiro.mcp_tools.httpx.AsyncClient", return_value=mock_client):

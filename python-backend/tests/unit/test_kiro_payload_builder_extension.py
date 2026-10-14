@@ -28,6 +28,47 @@ from extensions.kiro_payload_builder import (
 from kiro.converters_core import ThinkingConfig, UnifiedMessage, UnifiedTool
 
 
+def _advertised_model(model_id, *, effort_path="output_config", default_effort="low", output_limit=64000):
+    """Synthetic metadata, not a capture or a claim about the named cloud model."""
+    return {"modelId": model_id, "additionalModelRequestFieldsSchema": {
+        "type": "object", "properties": {
+            effort_path: {"type": "object", "properties": {"effort": {
+                "type": "string", "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"], "default": default_effort,
+            }}},
+            "thinking": {"type": "object", "properties": {
+                "type": {"type": "string", "enum": ["enabled", "disabled", "adaptive"]},
+                "budget_tokens": {"type": "integer", "minimum": 1, "maximum": output_limit},
+            }},
+            "max_tokens": {"type": "integer", "minimum": 1, "maximum": output_limit},
+        },
+    }}
+
+
+@pytest.fixture(autouse=True)
+def advertised_account_metadata():
+    from kiro.cache import ModelInfoCache
+    from extensions.request_context import start_request_state, reset_request_state
+
+    state, token = start_request_state()
+    # Direct converter unit calls below represent distinct requests. Real route
+    # tests use the middleware's managed budget and selection hook instead.
+    state.retry_budget = None
+    cache = ModelInfoCache()
+    cache._cache = {name: _advertised_model(name, output_limit=limit) for name, limit in (
+        ("claude-sonnet-4.6", 64000), ("claude-opus-4.6", 64000),
+        ("claude-opus-4.7", 128000), ("claude-opus-4.8", 128000),
+        ("claude-opus-5.5", 128000), ("claude-sonnet-5", 64000),
+    )}
+    cache._cache["gpt-5.6-sol"] = _advertised_model("gpt-5.6-sol", effort_path="reasoning", default_effort="high")
+    for name in ("claude-sonnet-4", "claude-sonnet-4.5", "claude-haiku-4.5", "claude-3.7-sonnet", "auto-kiro", "deepseek-3.2"):
+        cache._cache[name] = {"modelId": name, "additionalModelRequestFieldsSchema": {}}
+    state.model_cache = cache
+    try:
+        yield cache
+    finally:
+        reset_request_state(token)
+
+
 @pytest.fixture(autouse=True)
 def installed():
     uninstall_kiro_payload_builder()
@@ -73,108 +114,56 @@ def _result(tool_id, content="ok"):
     return {"type": "tool_result", "tool_use_id": tool_id, "content": content}
 
 
-class TestSanitizeJsonSchemaStrict:
-    """Port of kiro2cc-proxy schema.rs normalization."""
+class TestSanitizeJsonSchemaContract:
+    """The installed payload path must preserve the standalone schema contract."""
 
-    def test_resolves_defs_ref_and_drops_defs(self):
+    def test_references_and_recursive_definitions_survive(self):
         schema = {
             "type": "object",
-            "properties": {"item": {"$ref": "#/$defs/Item", "description": "the item"}},
-            "$defs": {"Item": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]}},
-        }
-        result = sanitize_json_schema(schema)
-        assert "$defs" not in result
-        item = result["properties"]["item"]
-        assert item["type"] == "object"
-        assert item["properties"]["id"] == {"type": "integer"}
-        assert item["required"] == ["id"]
-        assert item["description"] == "the item"  # sibling key wins
-
-    def test_resolves_definitions_ref(self):
-        schema = {
-            "properties": {"x": {"$ref": "#/definitions/X"}},
-            "definitions": {"X": {"type": "string", "enum": ["a", "b"]}},
-        }
-        result = sanitize_json_schema(schema)
-        assert result["properties"]["x"] == {"type": "string", "enum": ["a", "b"]}
-        assert "definitions" not in result
-
-    def test_unresolvable_ref_becomes_permissive_object(self):
-        schema = {"type": "object", "properties": {"x": {"$ref": "#/components/schemas/X"}}}
-        result = sanitize_json_schema(schema)
-        assert result["properties"]["x"] == {"type": "object", "properties": {}}
-
-    def test_cyclic_ref_is_depth_limited(self):
-        schema = {
             "properties": {"node": {"$ref": "#/$defs/Node"}},
             "$defs": {"Node": {"type": "object", "properties": {"child": {"$ref": "#/$defs/Node"}}}},
         }
-        result = sanitize_json_schema(schema)
-        depth = 0
-        node = result["properties"]["node"]
-        while "child" in node.get("properties", {}):
-            node = node["properties"]["child"]
-            depth += 1
-        assert 10 <= depth <= 20
-        assert node["type"] == "object"
+        assert sanitize_json_schema(schema) == schema
 
-    def test_strips_nulls_and_type_arrays(self):
+    def test_unknown_refs_are_not_replaced_by_permissive_objects(self):
+        schema = {"properties": {"x": {"$ref": "#/components/schemas/X"}}}
+        assert sanitize_json_schema(schema) == schema
+
+    def test_constraints_union_and_boolean_schemas_survive(self):
         schema = {
-            "type": "object",
-            "properties": {"name": {"type": ["null", "string"], "description": None}},
-            "required": None,
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "n": {"type": "integer", "minimum": 1, "maximum": 9},
+                "tag": {"const": "fixed"},
+                "union": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
+                "nullable": {"type": ["string", "null"]},
+                "denied": False,
+            },
         }
-        result = sanitize_json_schema(schema)
-        assert result == {"type": "object", "properties": {"name": {"type": "string"}}}
+        assert sanitize_json_schema(schema) == schema
 
-    def test_properties_null_becomes_dict(self):
-        assert sanitize_json_schema({"type": "object", "properties": None}) == {"type": "object", "properties": {}}
+    def test_invalid_required_is_actionable(self):
+        with pytest.raises(ValueError, match="required"):
+            sanitize_json_schema({"type": "object", "required": ["a", 3]})
+        assert sanitize_json_schema({"type": "object", "required": ["missing", "missing"]})["required"] == ["missing"]
 
-    def test_required_filtered_to_known_string_properties(self):
-        schema = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a", "missing", 3, "a"]}
-        assert sanitize_json_schema(schema)["required"] == ["a"]
+    def test_tuple_items_and_enum_values_survive(self):
+        schema = {"type": "array", "items": [{"type": "string"}, {"enum": [None, {"x": 1}]}]}
+        assert sanitize_json_schema(schema) == schema
 
-    def test_combinators_removed(self):
-        schema = {"type": "object", "properties": {"v": {"oneOf": [{"type": "string"}, {"type": "integer"}]}}}
-        assert sanitize_json_schema(schema)["properties"]["v"] == {}
+    def test_missing_schema_has_object_convention(self):
+        assert sanitize_json_schema(None) == {"type": "object", "properties": {}}
+        assert sanitize_json_schema({}) == {"type": "object", "properties": {}}
 
-    def test_single_branch_optional_anyof_is_collapsed(self):
-        schema = {"type": "object", "properties": {"v": {"anyOf": [{"type": "string"}, {"type": "null"}], "description": "d"}}}
-        assert sanitize_json_schema(schema)["properties"]["v"] == {"type": "string", "description": "d"}
+    def test_root_type_is_not_silently_rewritten(self):
+        assert sanitize_json_schema({"type": "string"}) == {"type": "string"}
 
-    def test_allof_single_ref_is_collapsed(self):
-        schema = {
-            "properties": {"e": {"allOf": [{"$ref": "#/$defs/E"}]}},
-            "$defs": {"E": {"type": "string", "enum": ["x"]}},
-        }
-        assert sanitize_json_schema(schema)["properties"]["e"] == {"type": "string", "enum": ["x"]}
-
-    def test_whitelists_keys_and_drops_additional_properties(self):
-        schema = {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "title": "T",
-            "additionalProperties": False,
-            "properties": {"n": {"type": "number", "minimum": 0, "default": 1, "format": "x"}},
-        }
-        assert sanitize_json_schema(schema) == {"type": "object", "properties": {"n": {"type": "number"}}}
-
-    def test_items_tuple_takes_first_schema(self):
-        schema = {"type": "object", "properties": {"l": {"type": "array", "items": [{"type": "string"}, {"type": "integer"}]}}}
-        assert sanitize_json_schema(schema)["properties"]["l"] == {"type": "array", "items": {"type": "string"}}
-
-    def test_root_forced_to_object(self):
-        assert sanitize_json_schema({"type": "string"}) == {"type": "object", "properties": {}}
-
-    def test_enum_keeps_only_scalars(self):
-        schema = {"properties": {"e": {"type": "string", "enum": ["a", None, {"x": 1}, 2]}}}
-        assert sanitize_json_schema(schema)["properties"]["e"]["enum"] == ["a", 2]
-
-    def test_does_not_mutate_input(self):
-        schema = {"properties": {"x": {"$ref": "#/$defs/X"}}, "$defs": {"X": {"type": "string"}}}
-        sanitize_json_schema(schema)
-        assert schema["properties"]["x"] == {"$ref": "#/$defs/X"}
-        assert "$defs" in schema
+    def test_caller_schema_not_mutated(self):
+        schema = {"title": "Root", "type": "object", "properties": {"x": {"minimum": 2}}}
+        normalized = sanitize_json_schema(schema)
+        normalized["properties"]["x"]["minimum"] = 10
+        assert schema["properties"]["x"]["minimum"] == 2
+        assert schema["title"] == "Root"
 
 
 class TestPlaceholderToolSpecs:
@@ -359,7 +348,8 @@ class TestSystemPromptPair:
         ], system_prompt="Sys")
         assert turn1["conversationState"]["history"][:2] == turn2["conversationState"]["history"][:2]
 
-    def test_gateway_additions_go_into_system_pair_and_thinking_tags_into_current(self):
+    def test_gateway_additions_go_into_system_pair_and_thinking_tags_into_current(self, monkeypatch):
+        monkeypatch.setenv("KIRO_LEGACY_FAKE_REASONING", "true")
         with patch("kiro.converters_core.FAKE_REASONING_ENABLED", True):
             payload = build_kiro_payload(
                 messages=[UnifiedMessage(role="user", content="Hi")],
@@ -394,78 +384,80 @@ class TestSystemPromptPair:
 
 class TestEnvelopeFields:
 
-    def test_agent_task_type_spectask_with_tools(self):
+    def test_tools_do_not_select_spec_task(self):
         cs = _payload([UnifiedMessage(role="user", content="Hi")], tools=[_tool()])["conversationState"]
-        assert cs["agentTaskType"] == "spectask"
+        assert cs["agentTaskType"] == "vibe"
 
     def test_agent_task_type_vibe_without_tools(self):
         cs = _payload([UnifiedMessage(role="user", content="Hi")])["conversationState"]
         assert cs["agentTaskType"] == "vibe"
         assert cs["chatTriggerType"] == "MANUAL"
 
-    def test_agent_continuation_id_matches_reference_derivation(self):
-        import hashlib
-        digest = hashlib.sha256(b"agent-continuation:conv-1").hexdigest()
-        expected = f"{digest[:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}"
-        assert derive_agent_continuation_id("conv-1") == expected
+    def test_anonymous_execution_id_is_not_derived_from_conversation(self):
+        import uuid
         cs = _payload([UnifiedMessage(role="user", content="Hi")])["conversationState"]
-        assert cs["agentContinuationId"] == expected
+        assert str(uuid.UUID(cs["agentContinuationId"])) == cs["agentContinuationId"]
+        assert cs["rootConversationId"] == cs["conversationId"]
+        assert derive_agent_continuation_id("conv-1") != cs["agentContinuationId"]
 
-    def test_agent_continuation_id_is_deterministic_and_distinct(self):
-        assert derive_agent_continuation_id("a") == derive_agent_continuation_id("a")
-        assert derive_agent_continuation_id("a") != derive_agent_continuation_id("b")
+    def test_new_anonymous_execution_ids_are_distinct(self):
+        assert derive_agent_continuation_id("a") != derive_agent_continuation_id("a")
         assert len(derive_agent_continuation_id("a")) == 36
 
 
 class TestAdditionalModelRequestFields:
+    def test_advertised_default_and_exact_output_limit(self):
+        assert build_additional_model_request_fields("claude-sonnet-4.6", 8192) == {
+            "output_config": {"effort": "low"}, "max_tokens": 8192,
+        }
+        with pytest.raises(ValueError, match="never clamped"):
+            build_additional_model_request_fields("claude-sonnet-4.6", 200000)
 
-    def test_default_effort_and_clamped_max_tokens(self):
-        fields = build_additional_model_request_fields("claude-sonnet-4.6", 200000, None)
-        assert fields == {"output_config": {"effort": "low"}, "max_tokens": 64000}
+    def test_small_output_limit_not_silently_raised(self):
+        assert build_additional_model_request_fields("claude-sonnet-4.6", 64)["max_tokens"] == 64
 
-    def test_min_max_tokens_is_1024(self):
-        fields = build_additional_model_request_fields("claude-sonnet-4.6", 200, None)
-        assert fields["max_tokens"] == 1024
-
-    def test_opus_large_cap(self):
+    def test_caps_are_metadata_not_model_generation(self, advertised_account_metadata):
         assert model_max_output_tokens("claude-opus-4.7") == 128000
-        assert model_max_output_tokens("claude-opus-5") == 128000
-        assert model_max_output_tokens("claude-sonnet-5") == 64000
-        fields = build_additional_model_request_fields("claude-opus-4.8", 500000, {"effort": "high"})
-        assert fields == {"output_config": {"effort": "high"}, "max_tokens": 128000}
+        advertised_account_metadata._cache["claude-opus-4.7"] = _advertised_model("claude-opus-4.7", output_limit=2500)
+        assert model_max_output_tokens("claude-opus-4.7") == 2500
+        with pytest.raises(ValueError):
+            build_additional_model_request_fields("claude-opus-4.7", 4096)
 
-    def test_no_max_tokens(self):
-        assert build_additional_model_request_fields("claude-sonnet-4.6", None, None) == {
-            "output_config": {"effort": "low"}
-        }
+    def test_effort_passthrough(self):
+        for effort in ("none", "minimal", "medium", "xhigh"):
+            assert build_additional_model_request_fields("claude-sonnet-4.6", 4096, {"effort": effort})["output_config"]["effort"] == effort
 
-    def test_skipped_for_45_generation_and_legacy(self):
-        assert additional_fields_skipped("claude-sonnet-4.5")
-        assert additional_fields_skipped("claude-haiku-4.5")
-        assert additional_fields_skipped("claude-opus-4.5")
-        assert additional_fields_skipped("claude-3.7-sonnet")
-        assert additional_fields_skipped("auto")
-        assert not additional_fields_skipped("claude-sonnet-4.6")
-        assert build_additional_model_request_fields("claude-sonnet-4.5", 4096, None) is None
+    def test_known_unsupported_fields_are_errors_not_silently_omitted(self):
+        assert build_additional_model_request_fields("claude-sonnet-4.5") is None
+        with pytest.raises(ValueError, match="unsupported"):
+            build_additional_model_request_fields("claude-sonnet-4.5", 8192)
 
-    def test_gpt_reasoning_effort(self):
-        assert build_additional_model_request_fields("gpt-5.6-sol", 4096, None) == {"reasoning": {"effort": "high"}}
+    def test_unknown_metadata_not_guessed_from_name(self):
+        assert build_additional_model_request_fields("claude-opus-100") is None
+        assert model_max_output_tokens("claude-opus-100") is None
+        with pytest.raises(ValueError, match="unknown"):
+            build_additional_model_request_fields("claude-opus-100", 64)
+
+    def test_reasoning_path_and_tokens_follow_metadata(self):
         assert build_additional_model_request_fields("gpt-5.6-sol", 4096, {"effort": "low"}) == {
-            "reasoning": {"effort": "low"}
+            "reasoning": {"effort": "low"}, "max_tokens": 4096,
         }
 
-    def test_env_flag_disables(self):
+    def test_disabled_fields_reject_explicit_intent(self):
         with patch("extensions.kiro_payload_builder.KIRO_ADDITIONAL_MODEL_FIELDS", False):
-            assert build_additional_model_request_fields("claude-sonnet-4.6", 4096, None) is None
+            assert build_additional_model_request_fields("claude-sonnet-4.6") is None
+            with pytest.raises(ValueError, match="disabled"):
+                build_additional_model_request_fields("claude-sonnet-4.6", 4096)
 
     def test_placed_at_payload_top_level(self):
         payload = _payload([UnifiedMessage(role="user", content="Hi")], max_tokens=8192, output_config={"effort": "medium"})
         assert payload["additionalModelRequestFields"] == {"output_config": {"effort": "medium"}, "max_tokens": 8192}
         assert "additionalModelRequestFields" not in payload["conversationState"]
 
-    def test_absent_for_skipped_model(self):
-        payload = _payload([UnifiedMessage(role="user", content="Hi")], model_id="claude-sonnet-4.5", max_tokens=8192)
-        assert "additionalModelRequestFields" not in payload
+    def test_native_thinking_and_budget_are_not_discarded(self):
+        assert build_additional_model_request_fields("claude-sonnet-4.6", 4096, native_thinking="enabled", thinking_budget=1024)["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+        with pytest.raises(ValueError, match="disabled thinking"):
+            build_additional_model_request_fields("claude-sonnet-4.6", 4096, native_thinking="disabled", thinking_budget=1024)
 
 
 # ==================================================================================================
@@ -565,7 +557,8 @@ class TestThinkingPolicy:
     def test_native_reasoning(self, model, native):
         assert model_has_native_reasoning(model) is native
 
-    def test_never_inject_into_native_models(self):
+    def test_never_inject_into_native_models(self, monkeypatch):
+        monkeypatch.setenv("KIRO_LEGACY_FAKE_REASONING", "true")
         cfg = ThinkingConfig(enabled=True, budget_tokens=8000)
         with patch("kiro.converters_core.FAKE_REASONING_ENABLED", True):
             assert inject_thinking_tags("Hi", cfg, "claude-opus-5.5") == "Hi"
@@ -629,16 +622,16 @@ class TestConversationId:
     def test_session_wins(self):
         assert derive_conversation_id({"user_id": self.SESSION}, "sys", ["a"], "hi") == self.SESSION
 
-    def test_fallback_stable_and_order_independent(self):
+    def test_anonymous_sessions_are_independent_even_with_same_prompt(self):
         a = derive_conversation_id(None, "sys", ["b", "a"], "hi")
         b = derive_conversation_id({}, "sys", ["a", "b"], "hi")
-        assert a == b
+        assert a != b
         assert len(a) == 36
 
-    def test_fallback_ignores_billing_header(self):
+    def test_anonymous_sessions_do_not_use_billing_header_hashes(self):
         a = derive_conversation_id(None, "x-anthropic-billing-header: cc_version=1;\nYou are X", [], "hi")
         b = derive_conversation_id(None, "x-anthropic-billing-header: cc_version=2;\nYou are X", [], "hi")
-        assert a == b
+        assert a != b
 
     def test_fallback_differs_by_first_message(self):
         assert derive_conversation_id(None, "s", [], "hi") != derive_conversation_id(None, "s", [], "yo")
@@ -656,7 +649,7 @@ def _anthropic_request(**overrides):
 
     body = {
         "model": "claude-sonnet-4.6",
-        "max_tokens": 200000,
+        "max_tokens": 8192,
         "system": "You are X",
         "messages": [{"role": "user", "content": "Hi"}],
     }
@@ -671,7 +664,7 @@ class TestAnthropicAdapter:
         payload = routes.anthropic_to_kiro(_anthropic_request(output_config={"effort": "high"}), "rand", "")
         fields = payload["additionalModelRequestFields"]
         assert fields["output_config"]["effort"] == "high"
-        assert fields["max_tokens"] == 64000  # clamped to the model cap
+        assert fields["max_tokens"] == 8192  # exact client value, not a model-name cap
 
     def test_default_effort_when_output_config_missing(self):
         import kiro.routes_anthropic as routes
@@ -684,13 +677,15 @@ class TestAnthropicAdapter:
 
         request = _anthropic_request(metadata={"user_id": f"user_abc_account__session_{SESSION}"})
         payload = routes.anthropic_to_kiro(request, "random-id", "")
-        assert payload["conversationState"]["conversationId"] == SESSION
+        again = routes.anthropic_to_kiro(request, "another-random-id", "")
+        assert payload["conversationState"]["conversationId"] == again["conversationState"]["conversationId"]
+        assert payload["conversationState"]["rootConversationId"] == payload["conversationState"]["conversationId"]
 
     def test_conversation_id_stable_across_turns(self):
         import kiro.routes_anthropic as routes
 
-        turn1 = _anthropic_request()
-        turn2 = _anthropic_request(messages=[
+        turn1 = _anthropic_request(metadata={"user_id": SESSION})
+        turn2 = _anthropic_request(metadata={"user_id": SESSION}, messages=[
             {"role": "user", "content": "Hi"},
             {"role": "assistant", "content": "Hello"},
             {"role": "user", "content": "More"},
@@ -698,7 +693,7 @@ class TestAnthropicAdapter:
         a = routes.anthropic_to_kiro(turn1, "r1", "")["conversationState"]
         b = routes.anthropic_to_kiro(turn2, "r2", "")["conversationState"]
         assert a["conversationId"] == b["conversationId"]
-        assert a["agentContinuationId"] == b["agentContinuationId"]
+        assert a["agentContinuationId"] != b["agentContinuationId"]
         # system pair is a byte-stable prefix
         assert a["history"][:2] == b["history"][:2]
 
@@ -740,11 +735,11 @@ class TestOpenAIAdapter:
         fields = payload["additionalModelRequestFields"]
         assert fields == {"output_config": {"effort": "medium"}, "max_tokens": 2000}
 
-    def test_unmapped_effort_uses_default(self):
+    def test_xhigh_effort_is_not_replaced_by_default(self):
         import kiro.routes_openai as routes
 
         payload = routes.build_kiro_payload(self._request(reasoning_effort="xhigh"), "c", "")
-        assert payload["additionalModelRequestFields"]["output_config"]["effort"] == "low"
+        assert payload["additionalModelRequestFields"]["output_config"]["effort"] == "xhigh"
 
     def test_no_reasoning_effort_means_no_fake_reasoning(self):
         from kiro.converters_openai import extract_thinking_config_from_openai
@@ -755,8 +750,8 @@ class TestOpenAIAdapter:
     def test_conversation_id_stable_across_turns(self):
         import kiro.routes_openai as routes
 
-        a = routes.build_kiro_payload(self._request(), "r1", "")
-        b = routes.build_kiro_payload(self._request(messages=[
+        a = routes.build_kiro_payload(self._request(user=SESSION), "r1", "")
+        b = routes.build_kiro_payload(self._request(user=SESSION, messages=[
             {"role": "user", "content": "Hi"},
             {"role": "assistant", "content": "Hello"},
             {"role": "user", "content": "More"},

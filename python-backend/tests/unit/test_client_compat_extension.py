@@ -221,7 +221,11 @@ def client(kiro, monkeypatch):
     import kiro.routes_anthropic as routes_anthropic
     import kiro.routes_openai as routes_openai
     from kiro.http_client import KiroHttpClient
+    from kiro.account_manager import AccountManager
+    from kiro.cache import ModelInfoCache
+    from extensions.upstream_account import install_upstream_account_context, uninstall_upstream_account_context
 
+    uninstall_upstream_account_context()
     monkeypatch.setattr(routes_anthropic, "PROXY_API_KEY", "k")
     monkeypatch.setattr(routes_openai, "PROXY_API_KEY", "k")
     monkeypatch.setattr("kiro.routes_anthropic.WEB_SEARCH_ENABLED", False)
@@ -252,11 +256,18 @@ def client(kiro, monkeypatch):
     auth.fingerprint = "fp"
     auth.api_host = "https://runtime.us-east-1.kiro.dev"
     auth.profile_arn = auth._profile_arn = "arn:aws:codewhisperer:us-east-1:1:profile/x"
-    cache = MagicMock()
-    cache.get_max_input_tokens.return_value = 200000
+    # Synthetic advertised metadata; no live model-name capability assumptions.
+    cache = ModelInfoCache()
+    cache._cache = {"claude-opus-4.7": {"modelId": "claude-opus-4.7", "tokenLimits": {"maxInputTokens": 200000},
+        "additionalModelRequestFieldsSchema": {"type": "object", "properties": {
+            "output_config": {"type": "object", "properties": {"effort": {"enum": ["low", "medium", "high", "xhigh"], "default": "low"}}},
+            "max_tokens": {"type": "integer", "minimum": 1, "maximum": 128000},
+            "thinking": {"type": "object", "properties": {"type": {"enum": ["enabled", "disabled", "adaptive"]}}},
+        }}}}
     account = MagicMock(id="a", auth_manager=auth, model_cache=cache, model_resolver=MagicMock())
-    app.state.account_manager = MagicMock()
-    app.state.account_manager.get_first_account.return_value = account
+    monkeypatch.setattr(AccountManager, "get_first_account", lambda self: account)
+    install_upstream_account_context()
+    app.state.account_manager = object.__new__(AccountManager)
     app.state.account_system = False
     app.state.http_client = fake_client
 
@@ -264,6 +275,7 @@ def client(kiro, monkeypatch):
         yield TestClient(app, raise_server_exceptions=False)
     finally:
         uninstall_client_compat(app)
+        uninstall_upstream_account_context()
         uninstall_upstream_retry()
         uninstall_kiro_payload_builder()
         uninstall_kiro_stream_decoder()

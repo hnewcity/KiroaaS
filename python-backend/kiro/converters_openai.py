@@ -32,6 +32,7 @@ Contains functions for:
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
+from kiro.native_reasoning import reasoning_blocks
 
 from kiro.config import HIDDEN_MODELS
 from kiro.model_resolver import get_model_id_for_kiro
@@ -225,7 +226,8 @@ def convert_openai_messages_to_unified(messages: List[ChatMessage]) -> Tuple[str
                 content=extract_text_content(msg.content),
                 tool_calls=tool_calls,
                 tool_results=tool_results,
-                images=images
+                images=images,
+                native_blocks=reasoning_blocks(getattr(msg, "reasoning_details", None)) if msg.role == "assistant" else None,
             )
             processed.append(unified_msg)
     

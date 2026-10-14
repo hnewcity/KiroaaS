@@ -7,6 +7,8 @@ Tests token management logic for Kiro without real network requests.
 
 import asyncio
 import json
+import sqlite3
+from pathlib import Path
 import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, Mock, patch
@@ -1452,10 +1454,15 @@ class TestKiroAuthManagerSsoRegionSeparation:
             
             # Patch _load_credentials_from_sqlite to track if it's called
             with patch.object(manager, '_load_credentials_from_sqlite') as mock_load:
+                async def respond_after_checking_no_preload(*args: object, **kwargs: object) -> AsyncMock:
+                    mock_load.assert_not_called()
+                    return mock_response
+
+                mock_client.post.side_effect = respond_after_checking_no_preload
                 await manager._refresh_token_aws_sso_oidc()
                 
-                print("Verification: SQLite was NOT reloaded (success on first try)...")
-                mock_load.assert_not_called()
+                print("Verification: SQLite identity is rechecked only AFTER the HTTP response...")
+                mock_load.assert_called_once_with("/fake/path/data.sqlite3")
                 
                 print("Verification: Request used in-memory token...")
                 call_args = mock_client.post.call_args
@@ -4251,3 +4258,475 @@ class TestAPIRegionPriorityHierarchy:
         print(f"Result: api_host={manager5._api_host}")
         assert "ap-south-1" in manager5._api_host
 
+
+
+# These fixtures use only synthetic credentials and real temporary source files.
+_IDENTITY_SQLITE_NAMES = {
+    "accessToken": "access_token", "refreshToken": "refresh_token",
+    "profileArn": "profile_arn", "expiresAt": "expires_at",
+}
+
+
+def _write_identity_source(path: Path, source: str, data: dict[str, object]) -> None:
+    """Replace a fake JSON/SQLite credential payload at the same configured path."""
+    if source == "json":
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return
+    token = {
+        _IDENTITY_SQLITE_NAMES.get(key, key): value
+        for key, value in data.items() if key not in ("clientId", "clientSecret")
+    }
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS auth_kv (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("DELETE FROM auth_kv")
+        key = "kirocli:odic:token" if "clientId" in data else "kirocli:social:token"
+        conn.execute("INSERT INTO auth_kv VALUES (?, ?)", (key, json.dumps(token)))
+        if "clientId" in data:
+            registration = {"client_id": data["clientId"], "client_secret": data.get("clientSecret")}
+            conn.execute("INSERT INTO auth_kv VALUES (?, ?)", (
+                "kirocli:odic:device-registration", json.dumps(registration)
+            ))
+    conn.close()
+
+
+def _identity_manager(path: Path, source: str) -> KiroAuthManager:
+    """Construct the actual auth manager against one temporary credential source."""
+    if source == "json":
+        return KiroAuthManager(creds_file=str(path))
+    return KiroAuthManager(sqlite_db=str(path))
+
+
+def _reload_identity_source(manager: KiroAuthManager, path: Path, source: str) -> None:
+    """Exercise the actual loader rather than mocking credential assignment."""
+    if source == "json":
+        manager._load_credentials_from_file(str(path))
+    else:
+        manager._load_credentials_from_sqlite(str(path))
+
+
+@pytest.fixture(params=["json", "sqlite"])
+def identity_source(request: pytest.FixtureRequest, tmp_path: Path) -> tuple[str, Path]:
+    """Supply isolated, initially absent JSON and SQLite source paths."""
+    source = str(request.param)
+    return source, tmp_path / ("credentials.json" if source == "json" else "credentials.sqlite3")
+
+
+@pytest.fixture
+def identity_payload() -> dict[str, object]:
+    """Synthetic credentials with a deliberately uninformative shared label."""
+    return {
+        "accessToken": "fake-access-a", "refreshToken": "fake-refresh-a",
+        "expiresAt": "2099-01-01T00:00:00Z", "region": "us-east-1",
+        "profileArn": "arn:aws:codewhisperer:us-east-1:000000000000:profile/shared-label",
+        "email": "unverified@example.invalid",
+    }
+
+
+def _identity_response(status: int = 200, **overrides: object) -> httpx.Response:
+    """Build an offline refresh response, including request context for errors."""
+    data = {"accessToken": "fake-access-rotated", "refreshToken": "fake-refresh-rotated", "expiresIn": 3600}
+    data.update(overrides)
+    return httpx.Response(status, json=data, request=httpx.Request("POST", "https://refresh.invalid/token"))
+
+
+class TestCredentialGeneration:
+    """Exercise credential epochs through real loaders, refreshes and locks."""
+
+    def test_same_path_replacement_and_aba(
+        self, identity_source: tuple[str, Path], identity_payload: dict[str, object]
+    ) -> None:
+        """Tokens, not a shared path/profile/email, distinguish external reloads."""
+        source, path = identity_source
+        _write_identity_source(path, source, identity_payload)
+        manager = _identity_manager(path, source)
+        first = manager.credential_generation
+        assert first != _identity_manager(path, source).credential_generation
+        _reload_identity_source(manager, path, source)
+        assert manager.credential_generation == first
+        replacement = path.with_name("replacement" + path.suffix)
+        changed = dict(identity_payload, accessToken="fake-access-b", refreshToken="fake-refresh-b")
+        _write_identity_source(replacement, source, changed)
+        replacement.replace(path)
+        _reload_identity_source(manager, path, source)
+        second = manager.credential_generation
+        assert second != first
+        assert manager._access_token == "fake-access-b"
+        _reload_identity_source(manager, path, source)
+        assert manager.credential_generation == second
+        _write_identity_source(path, source, identity_payload)
+        _reload_identity_source(manager, path, source)
+        assert manager.credential_generation not in (first, second)
+
+    @pytest.mark.parametrize("field", ["accessToken", "refreshToken", "clientSecret", "profileArn"])
+    def test_individual_credential_field_changes_invalidate(
+        self, identity_source: tuple[str, Path], identity_payload: dict[str, object], field: str
+    ) -> None:
+        """An unchanged refresh token or profile cannot authorize an external change."""
+        source, path = identity_source
+        identity_payload.update(clientId="fake-client", clientSecret="fake-secret")
+        _write_identity_source(path, source, identity_payload)
+        manager = _identity_manager(path, source)
+        before = manager.credential_generation
+        identity_payload[field] = "fake-changed"
+        _write_identity_source(path, source, identity_payload)
+        _reload_identity_source(manager, path, source)
+        assert manager.credential_generation != before
+
+    def test_labels_expiry_and_reformatting_do_not_change_identity(
+        self, identity_source: tuple[str, Path], identity_payload: dict[str, object]
+    ) -> None:
+        """Unverified labels and token expiry are not account identity evidence."""
+        source, path = identity_source
+        _write_identity_source(path, source, identity_payload)
+        manager = _identity_manager(path, source)
+        before = manager.credential_generation
+        identity_payload.update(email="different@example.invalid", expiresAt="2098-01-01T00:00:00Z")
+        _write_identity_source(path, source, dict(reversed(list(identity_payload.items()))))
+        _reload_identity_source(manager, path, source)
+        assert manager.credential_generation == before
+
+    @pytest.mark.asyncio
+    async def test_missing_credentials_and_failed_refresh_then_initial_load(
+        self, identity_source: tuple[str, Path], identity_payload: dict[str, object]
+    ) -> None:
+        """Missing/uninitialized managers remain stable until credentials arrive."""
+        source, path = identity_source
+        manager = _identity_manager(path, source)
+        before = manager.credential_generation
+        _reload_identity_source(manager, path, source)
+        with pytest.raises(ValueError, match="Refresh token is not set"):
+            await manager.force_refresh()
+        assert manager.credential_generation == before
+        _write_identity_source(path, source, identity_payload)
+        _reload_identity_source(manager, path, source)
+        assert manager.credential_generation != before
+        assert await manager.get_access_token() == "fake-access-a"
+
+    def test_deleted_or_malformed_source_does_not_replace_loaded_credentials(
+        self, identity_source: tuple[str, Path], identity_payload: dict[str, object]
+    ) -> None:
+        """A failed read retains the existing in-memory identity and credentials."""
+        source, path = identity_source
+        _write_identity_source(path, source, identity_payload)
+        manager = _identity_manager(path, source)
+        before = manager.credential_generation
+        path.unlink()
+        _reload_identity_source(manager, path, source)
+        path.write_text("not valid JSON or SQLite", encoding="utf-8")
+        _reload_identity_source(manager, path, source)
+        assert manager.credential_generation == before
+        assert manager._access_token == "fake-access-a"
+
+    @pytest.mark.parametrize("empty", [False, True])
+    def test_replacement_clears_old_account_fields(
+        self, identity_source: tuple[str, Path], identity_payload: dict[str, object], empty: bool
+    ) -> None:
+        """A partial/empty replacement cannot reuse the previous account's access token."""
+        source, path = identity_source
+        identity_payload.update(clientId="fake-client", clientSecret="fake-secret")
+        _write_identity_source(path, source, identity_payload)
+        manager = _identity_manager(path, source)
+        before = manager.credential_generation
+        _write_identity_source(path, source, {} if empty else {"refreshToken": "fake-refresh-b"})
+        _reload_identity_source(manager, path, source)
+        assert manager.credential_generation != before
+        assert manager._access_token is None
+        assert manager._profile_arn is None
+        assert manager._expires_at is None
+        assert manager._client_id is None
+        assert manager._client_secret is None
+        assert manager.auth_type == AuthType.KIRO_DESKTOP
+        assert manager._refresh_token == (None if empty else "fake-refresh-b")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("oidc", [False, True])
+    @pytest.mark.parametrize("readonly", [False, True])
+    async def test_own_refresh_rotation_and_reload_preserve_generation(
+        self, identity_source: tuple[str, Path], identity_payload: dict[str, object],
+        monkeypatch: pytest.MonkeyPatch, oidc: bool, readonly: bool,
+    ) -> None:
+        """Both refresh protocols retain continuity with written or unchanged sources."""
+        source, path = identity_source
+        if oidc:
+            identity_payload.update(clientId="fake-client", clientSecret="fake-secret")
+        _write_identity_source(path, source, identity_payload)
+        manager = _identity_manager(path, source)
+        before = manager.credential_generation
+        monkeypatch.setattr("kiro.auth.SQLITE_READONLY", readonly)
+        with patch("kiro.auth.httpx.AsyncClient") as client_factory:
+            post = client_factory.return_value.__aenter__.return_value.post
+            post.return_value = _identity_response()
+            assert await manager.force_refresh() == "fake-access-rotated"
+        assert manager.credential_generation == before
+        _reload_identity_source(manager, path, source)
+        assert manager.credential_generation == before
+        assert manager._access_token == ("fake-access-a" if source == "sqlite" and readonly else "fake-access-rotated")
+        identity_payload.update(accessToken="fake-access-b", refreshToken="fake-refresh-b")
+        _write_identity_source(path, source, identity_payload)
+        _reload_identity_source(manager, path, source)
+        assert manager.credential_generation != before
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("oidc", [False, True])
+    @pytest.mark.parametrize("failure", ["http", "missing-access", "invalid-expiry", "network"])
+    async def test_failed_refresh_does_not_change_identity_or_credentials(
+        self, identity_source: tuple[str, Path], identity_payload: dict[str, object],
+        oidc: bool, failure: str,
+    ) -> None:
+        """Rejected/malformed responses cannot partially commit rotated credentials."""
+        source, path = identity_source
+        if oidc:
+            identity_payload.update(clientId="fake-client", clientSecret="fake-secret")
+        _write_identity_source(path, source, identity_payload)
+        manager = _identity_manager(path, source)
+        before = manager.credential_generation
+        original = (manager._access_token, manager._refresh_token, manager._expires_at)
+        with patch("kiro.auth.httpx.AsyncClient") as client_factory:
+            post = client_factory.return_value.__aenter__.return_value.post
+            if failure == "http":
+                post.return_value = _identity_response(500)
+            elif failure == "missing-access":
+                post.return_value = _identity_response(accessToken=None)
+            elif failure == "invalid-expiry":
+                post.return_value = _identity_response(expiresIn="invalid")
+            else:
+                post.side_effect = httpx.ConnectError("offline simulated failure")
+            with pytest.raises((httpx.HTTPError, ValueError, TypeError)):
+                await manager.force_refresh()
+        assert manager.credential_generation == before
+        assert (manager._access_token, manager._refresh_token, manager._expires_at) == original
+        _reload_identity_source(manager, path, source)
+        assert manager.credential_generation == before
+
+    @pytest.mark.asyncio
+    async def test_get_access_token_singleflight_preserves_generation(
+        self, identity_source: tuple[str, Path], identity_payload: dict[str, object],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Waiters share one actual refresh rather than advancing separate epochs."""
+        source, path = identity_source
+        identity_payload["expiresAt"] = "2000-01-01T00:00:00Z"
+        _write_identity_source(path, source, identity_payload)
+        manager = _identity_manager(path, source)
+        before = manager.credential_generation
+        monkeypatch.setattr("kiro.auth.SQLITE_READONLY", False)
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def respond(*args: object, **kwargs: object) -> httpx.Response:
+            entered.set()
+            await release.wait()
+            return _identity_response()
+
+        with patch("kiro.auth.httpx.AsyncClient") as client_factory:
+            post = client_factory.return_value.__aenter__.return_value.post
+            post.side_effect = respond
+            tasks = [asyncio.create_task(manager.get_access_token()) for _ in range(8)]
+            await asyncio.wait_for(entered.wait(), timeout=2)
+            assert manager.credential_generation == before
+            release.set()
+            assert await asyncio.wait_for(asyncio.gather(*tasks), timeout=2) == ["fake-access-rotated"] * 8
+            assert post.await_count == 1
+        assert manager.credential_generation == before
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("oidc", [False, True])
+    @pytest.mark.parametrize("reload_during_http", [False, True])
+    async def test_external_reload_rejects_inflight_old_refresh_and_unblocks_waiter(
+        self, identity_source: tuple[str, Path], identity_payload: dict[str, object], oidc: bool,
+        reload_during_http: bool,
+    ) -> None:
+        """An old HTTP response cannot overwrite newly loaded credentials or their file."""
+        source, path = identity_source
+        if oidc:
+            identity_payload.update(clientId="fake-client", clientSecret="fake-secret")
+        _write_identity_source(path, source, identity_payload)
+        manager = _identity_manager(path, source)
+        before = manager.credential_generation
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def respond(*args: object, **kwargs: object) -> httpx.Response:
+            entered.set()
+            await release.wait()
+            return _identity_response()
+
+        with patch("kiro.auth.httpx.AsyncClient") as client_factory:
+            post = client_factory.return_value.__aenter__.return_value.post
+            post.side_effect = respond
+            refreshing = asyncio.create_task(manager.force_refresh())
+            await asyncio.wait_for(entered.wait(), timeout=2)
+            waiter = asyncio.create_task(manager.get_access_token())
+            identity_payload.update(accessToken="fake-access-b", refreshToken="fake-refresh-b")
+            _write_identity_source(path, source, identity_payload)
+            if reload_during_http:
+                _reload_identity_source(manager, path, source)
+            release.set()
+            with pytest.raises(ValueError, match="Credentials changed during token refresh"):
+                await asyncio.wait_for(refreshing, timeout=2)
+            changed = manager.credential_generation
+            assert await asyncio.wait_for(waiter, timeout=2) == "fake-access-b"
+            assert post.await_count == 1
+        assert changed != before
+        assert manager.credential_generation == changed
+        _reload_identity_source(manager, path, source)
+        assert manager.credential_generation == changed
+        assert manager._access_token == "fake-access-b"
+
+    @pytest.mark.asyncio
+    async def test_sqlite_refresh_retry_observes_external_relogin(self, tmp_path: Path) -> None:
+        """A 400-triggered reload inside force_refresh invalidates the caller's snapshot."""
+        path = tmp_path / "retry.sqlite3"
+        old = {"refreshToken": "fake-old", "clientId": "fake-client", "clientSecret": "fake-secret"}
+        _write_identity_source(path, "sqlite", old)
+        manager = _identity_manager(path, "sqlite")
+        before = manager.credential_generation
+        calls = 0
+
+        async def respond(*args: object, **kwargs: object) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            payload = kwargs["json"]
+            if calls == 1:
+                assert payload["refreshToken"] == "fake-old"
+                _write_identity_source(path, "sqlite", dict(old, refreshToken="fake-new-account"))
+                return _identity_response(400, error="invalid_request")
+            assert payload["refreshToken"] == "fake-new-account"
+            return _identity_response()
+
+        with patch("kiro.auth.httpx.AsyncClient") as client_factory:
+            post = client_factory.return_value.__aenter__.return_value.post
+            post.side_effect = respond
+            assert await manager.force_refresh() == "fake-access-rotated"
+            assert post.await_count == 2
+        assert manager.credential_generation != before
+
+    @pytest.mark.asyncio
+    async def test_sqlite_get_reloads_external_fresh_token_without_http(self, tmp_path: Path) -> None:
+        """The pre-refresh loader advances the epoch even when no OAuth call is needed."""
+        path = tmp_path / "pre-refresh.sqlite3"
+        _write_identity_source(path, "sqlite", {"accessToken": "fake-a", "expiresAt": "2000-01-01T00:00:00Z"})
+        manager = _identity_manager(path, "sqlite")
+        before = manager.credential_generation
+        _write_identity_source(path, "sqlite", {"accessToken": "fake-b", "expiresAt": "2099-01-01T00:00:00Z"})
+        with patch("kiro.auth.httpx.AsyncClient") as client_factory:
+            assert await manager.get_access_token() == "fake-b"
+            client_factory.assert_not_called()
+        assert manager.credential_generation != before
+
+    def test_enterprise_registration_replacement_is_observed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stable JSON token path cannot mask replacement of its device registration."""
+        home = tmp_path / "fake-home"
+        registration = home / ".aws" / "sso" / "cache" / "fake-hash.json"
+        registration.parent.mkdir(parents=True)
+        monkeypatch.setattr("kiro.auth.Path.home", lambda: home)
+        registration.write_text(json.dumps({"clientId": "fake-client", "clientSecret": "fake-a"}), encoding="utf-8")
+        path = tmp_path / "enterprise.json"
+        _write_identity_source(path, "json", {"refreshToken": "fake-refresh", "clientIdHash": "fake-hash"})
+        manager = _identity_manager(path, "json")
+        before = manager.credential_generation
+        _reload_identity_source(manager, path, "json")
+        assert manager.credential_generation == before
+        registration.write_text(json.dumps({"clientId": "fake-client", "clientSecret": "fake-b"}), encoding="utf-8")
+        _reload_identity_source(manager, path, "json")
+        assert manager.credential_generation != before
+        assert manager._client_secret == "fake-b"
+
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("oidc", [False, True])
+    async def test_readonly_recheck_keeps_latest_live_refresh_token(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oidc: bool,
+    ) -> None:
+        """An unchanged old disk snapshot must not undo earlier in-memory rotation."""
+        path = tmp_path / "readonly.sqlite3"
+        data = {"refreshToken": "fake-original"}
+        if oidc:
+            data.update(clientId="fake-client", clientSecret="fake-secret")
+        _write_identity_source(path, "sqlite", data)
+        monkeypatch.setattr("kiro.auth.SQLITE_READONLY", True)
+        manager = _identity_manager(path, "sqlite")
+        before = manager.credential_generation
+        with patch("kiro.auth.httpx.AsyncClient") as client_factory:
+            post = client_factory.return_value.__aenter__.return_value.post
+            post.side_effect = [_identity_response(), _identity_response(refreshToken=None)]
+            await manager.force_refresh()
+            assert manager._refresh_token == "fake-refresh-rotated"
+            await manager.force_refresh()
+            assert post.call_args.kwargs["json"]["refreshToken"] == "fake-refresh-rotated"
+            assert manager._refresh_token == "fake-refresh-rotated"
+        assert manager.credential_generation == before
+
+    @pytest.mark.asyncio
+    async def test_refresh_keys_and_errors_never_expose_credentials(self) -> None:
+        """Response bodies that echo tokens are not copied into logging or errors."""
+        from loguru import logger
+
+        access, refresh, secret = "fake-sensitive-access", "fake-sensitive-refresh", "fake-sensitive-secret"
+        manager = KiroAuthManager(refresh_token=refresh, client_id="fake-client", client_secret=secret)
+        messages: list[str] = []
+        sink = logger.add(lambda message: messages.append(str(message)))
+        try:
+            with patch("kiro.auth.httpx.AsyncClient") as client_factory:
+                post = client_factory.return_value.__aenter__.return_value.post
+                post.return_value = _identity_response(500, accessToken=access, refreshToken=refresh, clientSecret=secret)
+                with pytest.raises(httpx.HTTPStatusError) as error:
+                    await manager.force_refresh()
+            output = "".join(messages) + manager.credential_generation + str(error.value)
+            assert all(value not in output for value in (access, refresh, secret))
+        finally:
+            logger.remove(sink)
+
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("external_change", [False, True])
+    async def test_sqlite_failed_refresh_fallback_retains_correct_epoch(
+        self, tmp_path: Path, external_change: bool,
+    ) -> None:
+        """400 fallback keeps the loaded account's epoch, not the pre-reload epoch."""
+        path = tmp_path / "fallback.sqlite3"
+        data = {
+            "accessToken": "fake-access-a", "refreshToken": "fake-refresh-a",
+            "clientId": "fake-client", "clientSecret": "fake-secret",
+            "expiresAt": (datetime.now(timezone.utc) + timedelta(seconds=TOKEN_REFRESH_THRESHOLD / 2)).isoformat(),
+        }
+        _write_identity_source(path, "sqlite", data)
+        manager = _identity_manager(path, "sqlite")
+        before = manager.credential_generation
+        if external_change:
+            data.update(accessToken="fake-access-b", refreshToken="fake-refresh-b")
+            _write_identity_source(path, "sqlite", data)
+        with patch("kiro.auth.httpx.AsyncClient") as client_factory:
+            post = client_factory.return_value.__aenter__.return_value.post
+            post.return_value = _identity_response(400, error="invalid_request")
+            assert await manager.get_access_token() == data["accessToken"]
+            assert post.await_count == 2
+        assert (manager.credential_generation != before) is external_change
+
+    @pytest.mark.asyncio
+    async def test_failed_json_write_preserves_refresh_continuity(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A refresh belongs to the same epoch even when persistence is denied."""
+        from typing import TextIO
+
+        path = tmp_path / "unwritable.json"
+        _write_identity_source(path, "json", {"refreshToken": "fake-original"})
+        manager = _identity_manager(path, "json")
+        before = manager.credential_generation
+        original_open = open
+
+        def refuse_writes(file: str | Path, mode: str = "r", **kwargs: object) -> TextIO:
+            """Fail only the credential write, leaving real temporary-file reads intact."""
+            if "w" in mode:
+                raise PermissionError("simulated credential write denial")
+            return original_open(file, mode, **kwargs)
+
+        with monkeypatch.context() as context:
+            context.setattr("builtins.open", refuse_writes)
+            with patch("kiro.auth.httpx.AsyncClient") as client_factory:
+                client_factory.return_value.__aenter__.return_value.post.return_value = _identity_response()
+                assert await manager.force_refresh() == "fake-access-rotated"
+        assert manager.credential_generation == before
+        _reload_identity_source(manager, path, "json")
+        assert manager.credential_generation == before

@@ -145,21 +145,11 @@ async def call_kiro_mcp_api(
         logger.warning(f"Failed to log MCP request: {e}")
     
     try:
-        token = await auth_manager.get_access_token()
-        
-        # EXACT headers from architecture
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "x-amzn-codewhisperer-optout": "false",
-            "Content-Type": "application/json"
-        }
-        
-        mcp_url = f"{auth_manager.q_host}/mcp"
-        logger.debug(f"Calling MCP API: {mcp_url}")
-        
+        from extensions.protocol_runtime import request_operation
+
         async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(mcp_url, json=mcp_request, headers=headers)
-            
+            response = await request_operation(auth_manager, "mcp", payload=mcp_request, client=client)
+
             if response.status_code != 200:
                 logger.error(f"MCP API error: {response.status_code}")
                 return None, None

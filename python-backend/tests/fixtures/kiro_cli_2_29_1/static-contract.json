@@ -1,0 +1,192 @@
+{
+  "kind": "static-implementation-contract-not-live-capture",
+  "cli_version": "2.29.1",
+  "agent_version": "0.66.33",
+  "source_sha256": "ca0672e74c07a925cbeee0558e5e14bb77561deb2ffa0dc2d40ed4a72b441eba",
+  "readable_sha256": "bf8e9dd69e0381c924abb4b764fc3acae5844d7e0ee8e0abfd8501b974dc4e90",
+  "line_numbering": "LF-only split, not Unicode splitlines",
+  "contracts": {
+    "independent_modes": {
+      "lf_ranges": [
+        [
+          366488,
+          366495
+        ],
+        [
+          555899,
+          555909
+        ]
+      ],
+      "command_field": "agentMode",
+      "task_field": "conversationState.agentTaskType",
+      "spec_example": {
+        "agentMode": "spec",
+        "agentTaskType": "spectask"
+      }
+    },
+    "identities": {
+      "lf_ranges": [
+        [
+          366649,
+          366668
+        ],
+        [
+          454850,
+          454857
+        ]
+      ],
+      "fields": [
+        "conversationId",
+        "rootConversationId",
+        "agentContinuationId"
+      ],
+      "continuation_changes_on_new_user_message": true
+    },
+    "reasoning": {
+      "lf_ranges": [
+        [
+          363627,
+          363638
+        ],
+        [
+          365157,
+          365178
+        ]
+      ],
+      "event": "reasoningContentEvent",
+      "fields": [
+        "text",
+        "signature",
+        "redactedContent"
+      ],
+      "history_field": "reasoningContent",
+      "model_binding_required": true
+    },
+    "retry_hint": {
+      "lf_ranges": [
+        [
+          185822,
+          185835
+        ]
+      ],
+      "header": "x-amzn-kiro-ratelimit-retry-after",
+      "body_field": "retryAfterMilliseconds",
+      "unit": "milliseconds"
+    },
+    "capabilities": {
+      "lf_ranges": [
+        [
+          127577,
+          127643
+        ],
+        [
+          127705,
+          127735
+        ]
+      ],
+      "source_field": "additionalModelRequestFieldsSchema",
+      "effort_paths": [
+        "output_config.effort",
+        "reasoning.effort"
+      ],
+      "thinking_path": "thinking.type"
+    },
+    "system_prompt": {
+      "lf_ranges": [
+        [
+          366478,
+          366503
+        ]
+      ],
+      "field": "systemPrompt",
+      "feature_gated": true
+    },
+    "responses": {
+      "lf_ranges": [
+        [
+          362073,
+          362080
+        ],
+        [
+          362690,
+          362751
+        ]
+      ],
+      "path": "/v1/responses",
+      "feature_gated": true
+    },
+    "endpoints": {
+      "lf_ranges": [
+        [
+          126376,
+          126392
+        ]
+      ],
+      "control_plane": "https://management.{region}.kiro.dev",
+      "runtime": "https://runtime.{region}.kiro.dev"
+    },
+    "generate_wire": {
+      "lf_ranges": [
+        [
+          528119,
+          528146
+        ],
+        [
+          185082,
+          185091
+        ],
+        [
+          107165,
+          107204
+        ],
+        [
+          182435,
+          182443
+        ],
+        [
+          182252,
+          182266
+        ]
+      ],
+      "method": "POST",
+      "default_path": "/",
+      "target": "KiroRuntimeService.GenerateAssistantResponse",
+      "content_type": "application/x-amz-json-1.0",
+      "agentMode_location": "JSON body",
+      "note": "Actual selected AwsJson1_0Protocol; REST/httpHeader annotations do not select the wire path or strip agentMode."
+    },
+    "responses_output_limit": {
+      "lf_ranges": [
+        [
+          184375,
+          184380
+        ],
+        [
+          184557,
+          184579
+        ]
+      ],
+      "schema_member": "maxOutputTokens",
+      "json_name": "max_output_tokens",
+      "note": "Modeled global operation field. Gateway max_tokens compatibility mapping is not emitted by the source luo helper."
+    },
+    "stream_timeouts": {
+      "lf_ranges": [
+        [
+          362770,
+          362803
+        ],
+        [
+          363608,
+          363612
+        ]
+      ],
+      "note": "Raw Responses clears its request timeout after headers; a retry budget must not become an implicit lifetime cap on active generation."
+    }
+  },
+  "limitations": [
+    "No credentials or live traffic were used.",
+    "Static branches do not establish account-specific enablement.",
+    "Gateway policies and conservative normalization differences are documented separately."
+  ]
+}

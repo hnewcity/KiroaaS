@@ -101,6 +101,7 @@ class UnifiedMessage:
     tool_calls: Optional[List[Dict[str, Any]]] = None
     tool_results: Optional[List[Dict[str, Any]]] = None
     images: Optional[List[Dict[str, Any]]] = None
+    native_blocks: Optional[List[Dict[str, Any]]] = None
 
 
 @dataclass
@@ -974,7 +975,8 @@ def strip_all_tool_content(messages: List[UnifiedMessage]) -> Tuple[List[Unified
                 content=content,
                 tool_calls=None,
                 tool_results=None,
-                images=msg.images
+                images=msg.images,
+                native_blocks=msg.native_blocks,
             )
             result.append(cleaned_msg)
         else:
@@ -1057,7 +1059,8 @@ def ensure_assistant_before_tool_results(messages: List[UnifiedMessage]) -> Tupl
                     content=new_content,
                     tool_calls=msg.tool_calls,
                     tool_results=None,  # Remove orphaned tool_results (now in text)
-                    images=msg.images
+                    images=msg.images,
+                    native_blocks=msg.native_blocks,
                 )
                 result.append(cleaned_msg)
                 converted_any_tool_results = True
@@ -1096,6 +1099,10 @@ def merge_adjacent_messages(messages: List[UnifiedMessage]) -> List[UnifiedMessa
             continue
         
         last = merged[-1]
+        if msg.role == last.role and msg.role == "assistant" and (msg.native_blocks or last.native_blocks):
+            # Signed turns cannot be concatenated without invalidating provenance.
+            merged.append(msg)
+            continue
         if msg.role == last.role:
             # Merge content
             if isinstance(last.content, list) and isinstance(msg.content, list):
@@ -1243,7 +1250,8 @@ def normalize_message_roles(messages: List[UnifiedMessage]) -> List[UnifiedMessa
                 content=msg.content,
                 tool_calls=msg.tool_calls,
                 tool_results=msg.tool_results,
-                images=msg.images
+                images=msg.images,
+                native_blocks=msg.native_blocks,
             )
             normalized.append(normalized_msg)
             converted_count += 1

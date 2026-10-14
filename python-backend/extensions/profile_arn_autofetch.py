@@ -47,27 +47,24 @@ async def _fetch_profile_arn(auth_manager, token: str) -> None:
     All failure modes are swallowed with a warning — the request proceeds with
     whatever profileArn (possibly empty) it had before.
     """
+    from extensions.protocol_runtime import configured_profile, prepare_operation
+    from extensions.cloud_connector import require_cloud_route
+
+    profile = configured_profile(auth_manager)
     region = auth_manager._sso_region or auth_manager._region
-    url = _LIST_PROFILES_HOST_TEMPLATE.format(region=region)
-    fingerprint = auth_manager.fingerprint
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json; charset=UTF-8",
-        "Content-Encoding": "amz-1.0",
-        "X-Amz-Target": "AmazonCodeWhispererService.ListAvailableProfiles",
-        "User-Agent": f"aws-sdk-js/1.0.27 KiroIDE-0.7.45-{fingerprint}",
-        "x-amz-user-agent": f"aws-sdk-js/1.0.27 KiroIDE-0.7.45-{fingerprint}",
-    }
-    body = json.dumps({"nextToken": None}).encode()
+    legacy_url = _LIST_PROFILES_HOST_TEMPLATE.format(region=region)
+    prepared = prepare_operation(auth_manager, token, "POST", legacy_url, {"nextToken": None}, operation="ListAvailableProfiles")
+    require_cloud_route(prepared.url)
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(url, headers=headers, content=body)
+            response = await client.request(prepared.method, prepared.url, headers=prepared.headers,
+                                            json=prepared.payload, follow_redirects=False,
+                                            extensions={"kiro_upstream": True})
 
         if response.status_code != 200:
             logger.warning(
-                f"ListAvailableProfiles returned {response.status_code}: "
-                f"{response.text[:300]} — proceeding without profileArn"
+                f"ListAvailableProfiles returned {response.status_code}; proceeding without profileArn"
             )
             return
 
@@ -82,7 +79,7 @@ async def _fetch_profile_arn(auth_manager, token: str) -> None:
         arn = profiles[0].get("arn") or profiles[0].get("profileArn")
         if not arn:
             logger.warning(
-                f"ListAvailableProfiles: first profile has no arn field: {profiles[0]}"
+                "ListAvailableProfiles: first profile has no ARN field"
             )
             return
 
@@ -124,9 +121,9 @@ def install_profile_arn_autofetch() -> None:
         if (
             token
             and not self._profile_arn
-            and not getattr(self, _FETCH_ATTEMPTED_ATTR, False)
+            and getattr(self, _FETCH_ATTEMPTED_ATTR, None) != self.credential_generation
         ):
-            setattr(self, _FETCH_ATTEMPTED_ATTR, True)
+            setattr(self, _FETCH_ATTEMPTED_ATTR, self.credential_generation)
             await _fetch_profile_arn(self, token)
 
         return token

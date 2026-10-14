@@ -201,3 +201,8 @@ Contributions are welcome! Feel free to:
 ## 📄 License
 
 [AGPL-3.0](LICENSE) © KiroaaS Contributors
+
+
+## Kiro protocol compatibility
+
+The backend entry point is `python-backend/app_entry.py`. See `docs/KIRO_CLI_ALIGNMENT.md` for CLI RPC/Responses rollout flags, model capability validation, native reasoning replay, Cloud requirements, diagnostics, and rollback. New protocol paths remain opt-in until live acceptance for the selected account.

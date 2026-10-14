@@ -1225,7 +1225,7 @@ class TestGenerateThinkingSignature:
         signature = generate_thinking_signature()
         
         print(f"Generated signature: {signature}")
-        assert signature.startswith("sig_")
+        assert signature == ""  # Legacy text is unsigned; never fabricate upstream signatures.
         print("✓ Signature has correct prefix")
     
     def test_generates_unique_signatures(self):
@@ -1240,7 +1240,7 @@ class TestGenerateThinkingSignature:
         unique_signatures = set(signatures)
         print(f"Unique signatures: {len(unique_signatures)}")
         
-        assert len(unique_signatures) == 100
+        assert unique_signatures == {""}
         print("✓ All signatures are unique")
     
     def test_signature_has_correct_length(self):
@@ -1253,7 +1253,7 @@ class TestGenerateThinkingSignature:
         
         # Format: sig_ + 32 hex chars
         print(f"Generated signature: {signature}, length: {len(signature)}")
-        assert len(signature) == 4 + 32  # "sig_" + 32 chars
+        assert len(signature) == 0  # Only native upstream events may supply a signature.
         print("✓ Signature has correct length")
     
     def test_signature_contains_only_valid_characters(self):

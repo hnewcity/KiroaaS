@@ -13,23 +13,35 @@ httpx.AsyncClient.__init__ at startup, no upstream `kiro/` files touched.
 
 import hashlib
 import os
+import re
+from urllib.parse import urlsplit
 from typing import Optional
 
 import httpx
 from loguru import logger
 
 
+_REGION = r"(?:[a-z]{2}|eusc)(?:-[a-z]{2,12}){1,3}-[1-9][0-9]?"
+_KIRO_HOST = re.compile(rf"^(?:runtime|management)\.{_REGION}\.kiro\.dev$")
+_AWS_HOST = re.compile(rf"^(?:q|oidc)\.{_REGION}\.amazonaws\.com$")
+_DESKTOP_HOST = re.compile(rf"^prod\.{_REGION}\.auth\.desktop\.kiro\.dev$")
+
+
 def _is_target_host(host: str) -> bool:
-    # AWS Kiro/Q endpoints + AWS SSO OIDC token refresh
-    if host.endswith(".amazonaws.com") and host.startswith(("q.", "oidc.")):
-        return True
-    # Kiro Desktop refresh token endpoint (the other auth flow)
-    if host.endswith(".auth.desktop.kiro.dev"):
-        return True
-    # New runtime endpoint (replaces q.*.amazonaws.com): runtime.{region}.kiro.dev
-    if host.startswith("runtime.") and host.endswith(".kiro.dev"):
-        return True
-    return False
+    """Finite service-host allowlist; adding CLI management does not allow arbitrary hosts."""
+    host = host.lower()
+    return bool(_KIRO_HOST.fullmatch(host) or _AWS_HOST.fullmatch(host) or _DESKTOP_HOST.fullmatch(host))
+
+
+def require_cloud_route(url: str) -> None:
+    """Fail closed when an explicitly enabled relay cannot safely carry an operation."""
+    if os.getenv("KIROAAS_CLOUD_ENABLED", "false").lower() != "true":
+        return
+    target = urlsplit(url)
+    if target.scheme != "https" or target.username is not None or not _is_target_host(target.hostname or ""):
+        raise ValueError("Cloud mode cannot forward this upstream endpoint; configure a supported service endpoint or explicitly disable Cloud")
+    if not _installed:
+        raise ValueError("Cloud mode was requested but its transport is not installed; configure its URL/key and launch app_entry.py")
 
 
 _installed = False
@@ -47,7 +59,8 @@ class _CloudTransport(httpx.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         host = (request.url.host or "").lower()
-        if _is_target_host(host):
+        if request.extensions.get("kiro_upstream") or _is_target_host(host):
+            require_cloud_route(str(request.url))
             original = str(request.url)
             path = request.url.path + (
                 f"?{request.url.query.decode()}" if request.url.query else ""
@@ -71,7 +84,7 @@ class _CloudTransport(httpx.AsyncBaseTransport):
             request.headers["x-amz-content-sha256"] = hashlib.sha256(body).hexdigest()
             # Rewrite (don't pop) Host: h11 mandates it, and httpx won't recompute
             # because we mutate request.url in place rather than rebuilding the request.
-            request.headers["Host"] = self._forward_url.host
+            request.headers["Host"] = self._forward_url.netloc.decode("ascii")
             request.url = self._forward_url
             if not self._announced:
                 logger.info(
@@ -106,16 +119,14 @@ def install_cloud_connector() -> None:
     forward_url = os.getenv("KIROAAS_CLOUD_FORWARD_URL")
     token = os.getenv("KIROAAS_CLOUD_API_KEY")
     if not forward_url:
-        logger.warning(
-            "[cloud_connector] KIROAAS_CLOUD_FORWARD_URL not set; skipping install"
-        )
-        return
+        raise ValueError("Cloud mode requires KIROAAS_CLOUD_FORWARD_URL; direct fallback is disabled")
     if not token:
-        logger.warning(
-            "[cloud_connector] enabled but no API key in env (not signed in?); "
-            "skipping install — requests will go direct"
-        )
-        return
+        raise ValueError("Cloud mode requires sign-in/API key; direct fallback is disabled")
+    parsed = urlsplit(forward_url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username is not None or parsed.password is not None or parsed.fragment:
+        raise ValueError("Cloud forward URL must be HTTPS without credentials or fragments")
+    if any(ord(char) < 32 or ord(char) == 127 for char in token):
+        raise ValueError("Cloud API key contains invalid header characters")
 
     _originals["AsyncClient.__init__"] = httpx.AsyncClient.__init__
 
@@ -128,14 +139,14 @@ def install_cloud_connector() -> None:
             mounts = getattr(self, "_mounts", None)
             if isinstance(mounts, dict):
                 for key, t in list(mounts.items()):
-                    if not isinstance(t, _CloudTransport):
+                    if t is not None and not isinstance(t, _CloudTransport):
                         mounts[key] = _CloudTransport(t, forward_url, token)
-        except Exception as e:
-            logger.warning(f"[cloud_connector] failed to wrap transport: {e}")
+        except (AttributeError, TypeError, ValueError) as error:
+            raise RuntimeError("Cloud transport could not be installed; refusing direct fallback") from error
 
     httpx.AsyncClient.__init__ = patched_init  # type: ignore[assignment]
     _installed = True
-    logger.info(f"[cloud_connector] installed (forward={forward_url})")
+    logger.info("[cloud_connector] installed for HTTPS relay host {}", parsed.hostname)
 
 
 def uninstall_cloud_connector() -> None:

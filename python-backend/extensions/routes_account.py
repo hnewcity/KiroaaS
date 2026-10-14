@@ -15,6 +15,7 @@ from loguru import logger
 from kiro.auth import KiroAuthManager
 from kiro.routes_openai import verify_api_key
 from kiro.utils import get_kiro_headers
+from extensions.protocol_runtime import request_operation
 
 
 router = APIRouter()
@@ -40,19 +41,8 @@ async def get_usage(request: Request):
     auth_manager = _resolve_auth_manager(request)
     shared_client = request.app.state.http_client
 
-    token = await auth_manager.get_access_token()
-    headers = get_kiro_headers(auth_manager, token)
-    headers["x-amz-target"] = "com.amazon.aws.codewhisperer.runtime.AmazonCodeWhispererService.GetUsageLimits"
-    headers["Content-Type"] = "application/x-amz-json-1.0"
-
-    # GetUsageLimits lives on q.amazonaws.com; runtime.kiro.dev 400s with
-    # UnknownOperationException. q_host is redirected there by the
-    # control_plane_host extension.
-    url = auth_manager.q_host
-    body = {"origin": "AI_EDITOR", "isEmailRequired": True}
-
     try:
-        response = await shared_client.post(url, json=body, headers=headers)
+        response = await request_operation(auth_manager, "GetUsageLimits", payload={"isEmailRequired": True}, client=shared_client)
         if response.status_code != 200:
             raise HTTPException(status_code=response.status_code, detail=response.text)
         return JSONResponse(content=response.json())
@@ -77,24 +67,13 @@ async def get_account(request: Request):
     shared_client = request.app.state.http_client
 
     try:
-        token = await auth_manager.get_access_token()
-        headers = get_kiro_headers(auth_manager, token)
-        headers["x-amz-target"] = "com.amazon.aws.codewhisperer.runtime.AmazonCodeWhispererService.GetUsageLimits"
-        headers["Content-Type"] = "application/x-amz-json-1.0"
-
-        # GetUsageLimits lives on q.amazonaws.com (redirected q_host), not
-        # runtime.kiro.dev which only serves the chat operation.
-        url = auth_manager.q_host
-        body = {"origin": "AI_EDITOR", "isEmailRequired": True}
-
-        logger.debug(f"Calling Kiro API with headers: {headers}")
-        response = await shared_client.post(url, json=body, headers=headers)
+        response = await request_operation(auth_manager, "GetUsageLimits", payload={"isEmailRequired": True}, client=shared_client)
 
         logger.debug(f"Kiro API response status: {response.status_code}")
 
         if response.status_code != 200:
             error_text = response.text
-            logger.error(f"Kiro API error: {response.status_code} - {error_text}")
+            logger.error("Kiro usage API returned HTTP {}", response.status_code)
             raise HTTPException(status_code=response.status_code, detail=error_text)
 
         usage_data = response.json()
@@ -103,7 +82,7 @@ async def get_account(request: Request):
         subscription_info = usage_data.get("subscriptionInfo", {})
         usage_list = usage_data.get("usageBreakdownList", [])
 
-        logger.info(f"Full API response: {json.dumps(usage_data, indent=2)}")
+        logger.debug("Received account usage fields: {}", list(usage_data))
 
         usage_info = usage_list[0] if usage_list else {}
 

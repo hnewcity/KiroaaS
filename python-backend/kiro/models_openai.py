@@ -158,8 +158,8 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = None
     top_p: Optional[float] = None
     n: Optional[int] = 1
-    max_tokens: Optional[int] = None
-    max_completion_tokens: Optional[int] = None
+    max_tokens: Optional[int] = Field(default=None, strict=True, gt=0)
+    max_completion_tokens: Optional[int] = Field(default=None, strict=True, gt=0)
     stop: Optional[Union[str, List[str]]] = None
     presence_penalty: Optional[float] = None
     frequency_penalty: Optional[float] = None

@@ -57,12 +57,19 @@ class ThinkingContentBlock(BaseModel):
     Attributes:
         type: Always "thinking"
         thinking: The thinking/reasoning content
-        signature: Cryptographic signature for verification (placeholder in our case)
+        signature: Upstream signature, or empty for unsigned legacy textual reasoning
     """
 
     type: Literal["thinking"] = "thinking"
     thinking: str
     signature: str = ""
+
+
+class RedactedThinkingContentBlock(BaseModel):
+    """Opaque native reasoning; base64 data must be preserved, never interpreted."""
+
+    type: Literal["redacted_thinking"] = "redacted_thinking"
+    data: str
 
 
 class ToolUseContentBlock(BaseModel):
@@ -166,6 +173,7 @@ class ImageContentBlock(BaseModel):
 ContentBlock = Union[
     TextContentBlock,
     ThinkingContentBlock,
+    RedactedThinkingContentBlock,
     ImageContentBlock,
     ToolUseContentBlock,
     ToolResultContentBlock,
@@ -315,7 +323,7 @@ class AnthropicMessagesRequest(BaseModel):
 
     model: str
     messages: List[AnthropicMessage] = Field(min_length=1)
-    max_tokens: int
+    max_tokens: int = Field(strict=True, gt=0)
 
     # Optional parameters - system can be string or list of content blocks
     system: Optional[SystemPrompt] = None
@@ -406,7 +414,7 @@ class AnthropicMessagesResponse(BaseModel):
     id: str
     type: Literal["message"] = "message"
     role: Literal["assistant"] = "assistant"
-    content: List[Union[ThinkingContentBlock, TextContentBlock, ToolUseContentBlock]]
+    content: List[Union[ThinkingContentBlock, RedactedThinkingContentBlock, TextContentBlock, ToolUseContentBlock]]
     model: str
     stop_reason: Optional[
         Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]

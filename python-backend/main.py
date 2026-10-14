@@ -24,17 +24,17 @@ Application entry point. Creates FastAPI app and connects routes.
 
 Usage:
     # Using default settings (host: 0.0.0.0, port: 8000)
-    python main.py
+    python app_entry.py
     
     # With CLI arguments (highest priority)
-    python main.py --port 9000
-    python main.py --host 127.0.0.1 --port 9000
+    python app_entry.py --port 9000
+    python app_entry.py --host 127.0.0.1 --port 9000
     
     # With environment variables (medium priority)
-    SERVER_PORT=9000 python main.py
+    SERVER_PORT=9000 python app_entry.py
     
     # Using uvicorn directly (uvicorn handles its own CLI args)
-    uvicorn main:app --host 0.0.0.0 --port 8000
+    uvicorn app_entry:app --host 0.0.0.0 --port 8000
 
 Priority: CLI args > Environment variables > Default values
 """
@@ -611,13 +611,13 @@ Configuration Priority (highest to lowest):
   3. Default values (0.0.0.0:8000)
 
 Examples:
-  python main.py                          # Use defaults or env vars
-  python main.py --port 9000              # Override port only
-  python main.py --host 127.0.0.1         # Local connections only
-  python main.py -H 0.0.0.0 -p 8080       # Short form
+  python app_entry.py                          # Use defaults or env vars
+  python app_entry.py --port 9000              # Override port only
+  python app_entry.py --host 127.0.0.1         # Local connections only
+  python app_entry.py -H 0.0.0.0 -p 8080       # Short form
   
-  SERVER_PORT=9000 python main.py         # Via environment
-  uvicorn main:app --port 9000            # Via uvicorn directly
+  SERVER_PORT=9000 python app_entry.py         # Via environment
+  uvicorn app_entry:app --port 9000            # Via uvicorn directly
         """
     )
     

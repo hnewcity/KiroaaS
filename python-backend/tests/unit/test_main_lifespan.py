@@ -82,7 +82,7 @@ class TestLifespanLegacyFallback:
         
         # Assert: credentials.json was recreated
         assert creds_file.exists()
-        new_creds = json.loads(creds_file.read_text())
+        new_creds = json.loads(creds_file.read_text(encoding="utf-8"))
         print(f"New credentials.json: {new_creds}")
         
         assert len(new_creds) == 1
@@ -132,7 +132,7 @@ class TestLifespanLegacyFallback:
                     pass
         
         assert creds_file.exists()
-        first_content = creds_file.read_text()
+        first_content = creds_file.read_text(encoding="utf-8")
         print(f"First run created: {first_content}")
         
         # Modify credentials.json manually
@@ -150,7 +150,7 @@ class TestLifespanLegacyFallback:
                     pass
         
         # Assert: credentials.json was NOT overwritten
-        second_content = json.loads(creds_file.read_text())
+        second_content = json.loads(creds_file.read_text(encoding="utf-8"))
         print(f"Second run kept: {second_content}")
         
         assert second_content == manual_creds
@@ -214,7 +214,7 @@ class TestLifespanLegacyFallback:
                     pass
         
         # Assert: SQLite was chosen (highest priority)
-        creds = json.loads(creds_file.read_text())
+        creds = json.loads(creds_file.read_text(encoding="utf-8"))
         print(f"Created credentials: {creds}")
         
         assert len(creds) == 1
@@ -267,7 +267,7 @@ class TestLifespanLegacyFallback:
                     pass
         
         # Assert: overrides were added
-        creds = json.loads(creds_file.read_text())
+        creds = json.loads(creds_file.read_text(encoding="utf-8"))
         print(f"Created credentials with overrides: {creds}")
         
         assert creds[0]["profile_arn"] == "arn:aws:codewhisperer:eu-central-1:123456789:profile/test"
@@ -320,7 +320,7 @@ class TestLifespanLegacyFallback:
                     pass
         
         # Assert: credentials.json was not modified
-        final_creds = json.loads(creds_file.read_text())
+        final_creds = json.loads(creds_file.read_text(encoding="utf-8"))
         print(f"Final credentials.json: {final_creds}")
         
         assert final_creds == existing_creds

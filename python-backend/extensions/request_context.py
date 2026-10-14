@@ -20,13 +20,40 @@ writes made anywhere in the request are visible to the middleware.
 """
 
 from contextvars import ContextVar, Token
-from dataclasses import dataclass
-from typing import Optional, Tuple
+from dataclasses import dataclass, field
+import uuid
+from typing import Any, Dict, Optional, Tuple
+
+from extensions.retry_policy import RetryBudget
 
 
 @dataclass
 class RequestState:
     """Facts about one client request, written by hooks and read by the compat layer."""
+
+    client_scope: str = ""
+    account_scope: str = ""
+    session_id: Optional[str] = None
+    root_session_id: Optional[str] = None
+    turn_id: Optional[str] = None
+    agent_mode: str = "vibe"
+    task_type: str = "vibe"
+    anonymous_session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    execution_identities: Dict[str, Any] = field(default_factory=dict)
+    model_cache: Any = None
+    auth_manager: Any = None
+    auth_generation: Optional[str] = None
+    protocol_profile: Any = None
+    upstream_model_id: Optional[str] = None
+    response_model_id: Optional[str] = None
+    wire_identity: Any = None
+    recovered_reasoning_record: Any = None
+    input_turn_anchor: str = ""
+    legacy_thinking: bool = False
+    native_ledger: Any = None
+
+    # One shared inference budget across nested transport and route retries.
+    retry_budget: Optional[RetryBudget] = None
 
     # Last non-200 HTTP status returned by Kiro (from request_with_retry)
     upstream_status: Optional[int] = None
@@ -50,7 +77,7 @@ def current_state() -> Optional[RequestState]:
 
 def start_request_state() -> Tuple[RequestState, Token]:
     """Creates a fresh state for a request. Pair with reset_request_state()."""
-    state = RequestState()
+    state = RequestState(retry_budget=RetryBudget.from_environment())
     return state, _state.set(state)
 
 

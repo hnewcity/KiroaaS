@@ -35,7 +35,7 @@ import sqlite3
 from datetime import datetime, timezone, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 import httpx
 from loguru import logger
@@ -49,6 +49,8 @@ from kiro.config import (
     get_aws_sso_oidc_url,
 )
 from kiro.utils import get_machine_fingerprint
+from kiro.credential_identity import CredentialIdentity
+from kiro.client_identity import user_agent
 
 
 # Supported SQLite token keys (searched in priority order)
@@ -63,6 +65,22 @@ SQLITE_REGISTRATION_KEYS = [
     "kirocli:odic:device-registration",
     "codewhisperer:odic:device-registration",
 ]
+
+
+# Credential material only: expiry timestamps and unverified user labels are not
+# identity evidence. Profile/region fields are selectors, never proof of sameness.
+JSON_CREDENTIAL_FIELDS = {
+    "accessToken": "_access_token", "refreshToken": "_refresh_token",
+    "profileArn": "_profile_arn", "region": "_sso_region",
+    "clientId": "_client_id", "clientSecret": "_client_secret",
+    "clientIdHash": "_client_id_hash",
+}
+SQLITE_CREDENTIAL_FIELDS = {
+    "access_token": "_access_token", "refresh_token": "_refresh_token",
+    "profile_arn": "_profile_arn", "region": "_sso_region",
+}
+REGISTRATION_FIELDS = {"client_id": "_client_id", "client_secret": "_client_secret"}
+ENTERPRISE_REGISTRATION_FIELDS = {"clientId": "_client_id", "clientSecret": "_client_secret"}
 
 
 class AuthType(Enum):
@@ -142,6 +160,8 @@ class KiroAuthManager:
             api_region: Q API region override (optional, per-account)
                        If not specified, uses auto-detection or falls back to region
         """
+        self._credential_identity = CredentialIdentity()
+        self._initializing_credentials = True
         self._refresh_token = refresh_token
         self._profile_arn = profile_arn
         self._region = region
@@ -182,6 +202,8 @@ class KiroAuthManager:
         elif creds_file:
             self._load_credentials_from_file(creds_file)
         
+        self._initializing_credentials = False
+
         # Determine auth type based on available credentials
         self._detect_auth_type()
         
@@ -231,6 +253,54 @@ class KiroAuthManager:
             f"q_host={self._q_host}"
         )
     
+    @staticmethod
+    def _credential_source_material(
+        data: Mapping[str, object], fields: Mapping[str, str]
+    ) -> dict[str, object]:
+        """Select actual credential fields, preserving absent versus null values."""
+        return {key: data[key] for key in fields if key in data}
+
+    def _observe_credential_source(
+        self, source: str, data: Mapping[str, object], fields: Mapping[str, str]
+    ) -> None:
+        """Advance the epoch before applying externally loaded credentials.
+
+        On replacement, clear absent fields instead of mixing the old account's
+        access token or registration with the new account's refresh token.
+        Constructor fallback behavior is preserved for initial configuration.
+        """
+        material = self._credential_source_material(data, fields)
+        changed = self._credential_identity.observe(source, material)
+        if changed and not self._initializing_credentials:
+            for key, attribute in fields.items():
+                if key not in data:
+                    setattr(self, attribute, None)
+            if "_access_token" in fields.values():
+                self._expires_at = None
+
+    def _check_refresh_generation(self, generation: str) -> None:
+        """Recheck disk before committing a response to the captured generation.
+
+        This catches replacement while HTTP was in flight, before write-back
+        could overwrite another account. It is not a cross-process file lock.
+        """
+        if generation == self.credential_generation:
+            # A read-only source may still hold pre-rotation tokens. The recheck
+            # must not roll back our live refresh token when that source is equal.
+            attributes = set(JSON_CREDENTIAL_FIELDS.values()) | {
+                "_expires_at", "_scopes", "_detected_api_region", "_sqlite_token_key", "_auth_type",
+            }
+            previous = {name: getattr(self, name) for name in attributes}
+            if self._sqlite_db:
+                self._load_credentials_from_sqlite(self._sqlite_db)
+            elif self._creds_file:
+                self._load_credentials_from_file(self._creds_file)
+            if generation == self.credential_generation:
+                for name, value in previous.items():
+                    setattr(self, name, value)
+        if generation != self.credential_generation:
+            raise ValueError("Credentials changed during token refresh; retry with the selected account")
+
     def _detect_auth_type(self) -> None:
         """
         Detects authentication type based on available credentials.
@@ -267,6 +337,7 @@ class KiroAuthManager:
         Args:
             db_path: Path to SQLite database file
         """
+        conn: Optional[sqlite3.Connection] = None
         try:
             path = Path(db_path).expanduser()
             if not path.exists():
@@ -288,6 +359,7 @@ class KiroAuthManager:
             
             if token_row:
                 token_data = json.loads(token_row[0])
+                self._observe_credential_source("sqlite-token", token_data or {}, SQLITE_CREDENTIAL_FIELDS)
                 if token_data:
                     # Load token fields (using snake_case as in Rust struct)
                     if 'access_token' in token_data:
@@ -320,6 +392,9 @@ class KiroAuthManager:
                         except Exception as e:
                             logger.warning(f"Failed to parse expires_at from SQLite: {e}")
             
+            else:
+                self._observe_credential_source("sqlite-token", {}, SQLITE_CREDENTIAL_FIELDS)
+
             # Load device registration (client_id, client_secret) - try all possible keys
             registration_row = None
             for key in SQLITE_REGISTRATION_KEYS:
@@ -331,6 +406,7 @@ class KiroAuthManager:
             
             if registration_row:
                 registration_data = json.loads(registration_row[0])
+                self._observe_credential_source("sqlite-registration", registration_data or {}, REGISTRATION_FIELDS)
                 if registration_data:
                     if 'client_id' in registration_data:
                         self._client_id = registration_data['client_id']
@@ -340,6 +416,9 @@ class KiroAuthManager:
                     if 'region' in registration_data and not self._sso_region:
                         self._sso_region = registration_data['region']
                         logger.debug(f"SSO region from device-registration: {self._sso_region}")
+
+            else:
+                self._observe_credential_source("sqlite-registration", {}, REGISTRATION_FIELDS)
 
             # Try to auto-detect API region from profile ARN in state table
             # This is separate from SSO region because q.amazonaws.com endpoints
@@ -371,7 +450,6 @@ class KiroAuthManager:
             except Exception as e:
                 logger.debug(f"Failed to auto-detect API region from profile ARN: {e}")
 
-            conn.close()
             logger.info(f"Credentials loaded from SQLite database: {db_path}")
             
         except sqlite3.Error as e:
@@ -380,6 +458,10 @@ class KiroAuthManager:
             logger.error(f"JSON decode error in SQLite data: {e}")
         except Exception as e:
             logger.error(f"Error loading credentials from SQLite: {e}")
+        finally:
+            if conn is not None:
+                conn.close()
+            self._detect_auth_type()
     
     def _load_credentials_from_file(self, file_path: str) -> None:
         """
@@ -413,6 +495,8 @@ class KiroAuthManager:
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
+            self._observe_credential_source("json", data, JSON_CREDENTIAL_FIELDS)
+
             # Load common data from file
             if 'refreshToken' in data:
                 self._refresh_token = data['refreshToken']
@@ -454,6 +538,8 @@ class KiroAuthManager:
             
         except Exception as e:
             logger.error(f"Error loading credentials from file: {e}")
+        finally:
+            self._detect_auth_type()
     
     def _load_enterprise_device_registration(self, client_id_hash: str) -> None:
         """
@@ -469,12 +555,15 @@ class KiroAuthManager:
             device_reg_path = Path.home() / ".aws" / "sso" / "cache" / f"{client_id_hash}.json"
             
             if not device_reg_path.exists():
+                self._observe_credential_source("enterprise-registration", {}, ENTERPRISE_REGISTRATION_FIELDS)
                 logger.warning(f"Enterprise device registration file not found: {device_reg_path}")
                 return
             
             with open(device_reg_path, 'r', encoding='utf-8') as f:
                 device_data = json.load(f)
             
+            self._observe_credential_source("enterprise-registration", device_data, ENTERPRISE_REGISTRATION_FIELDS)
+
             if 'clientId' in device_data:
                 self._client_id = device_data['clientId']
             
@@ -516,6 +605,9 @@ class KiroAuthManager:
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(existing_data, f, indent=2, ensure_ascii=False)
             
+            self._credential_identity.record_write(
+                "json", self._credential_source_material(existing_data, JSON_CREDENTIAL_FIELDS)
+            )
             logger.debug(f"Credentials saved to {self._creds_file}")
             
         except Exception as e:
@@ -625,7 +717,14 @@ class KiroAuthManager:
                 (token_json, key)
             )
             
-            return cursor.rowcount > 0
+            saved = cursor.rowcount > 0
+            if saved:
+                # These tokens came from our refresh even if the later commit
+                # fails. An unchanged on-disk source also remains in this epoch.
+                self._credential_identity.record_write(
+                    "sqlite-token", self._credential_source_material(existing_data, SQLITE_CREDENTIAL_FIELDS)
+                )
+            return saved
             
         except Exception as e:
             logger.debug(f"Failed to save to key {key}: {e}")
@@ -702,9 +801,12 @@ class KiroAuthManager:
         payload = {'refreshToken': self._refresh_token}
         headers = {
             "Content-Type": "application/json",
-            "User-Agent": f"KiroIDE-0.7.45-{self._fingerprint}",
+            "User-Agent": user_agent(),
         }
         
+        from extensions.cloud_connector import require_cloud_route
+        require_cloud_route(self._refresh_url)
+        generation = self.credential_generation
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(self._refresh_url, json=payload, headers=headers)
             response.raise_for_status()
@@ -716,8 +818,11 @@ class KiroAuthManager:
         new_profile_arn = data.get("profileArn")
         
         if not new_access_token:
-            raise ValueError(f"Response does not contain accessToken: {data}")
+            raise ValueError("Response does not contain accessToken")
         
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in - 60)
+        self._check_refresh_generation(generation)
+
         # Update data
         self._access_token = new_access_token
         if new_refresh_token:
@@ -725,13 +830,8 @@ class KiroAuthManager:
         if new_profile_arn:
             self._profile_arn = new_profile_arn
         
-        # Calculate expiration time with buffer (minus 60 seconds)
-        self._expires_at = datetime.now(timezone.utc).replace(microsecond=0)
-        self._expires_at = datetime.fromtimestamp(
-            self._expires_at.timestamp() + expires_in - 60,
-            tz=timezone.utc
-        )
-        
+        self._expires_at = expires_at.replace(microsecond=0)
+
         logger.info(f"Token refreshed via Kiro Desktop Auth, expires: {self._expires_at.isoformat()}")
         
         # Save to file or SQLite depending on configuration
@@ -803,6 +903,8 @@ class KiroAuthManager:
         # Use SSO region for OIDC endpoint (may differ from API region)
         sso_region = self._sso_region or self._region
         url = get_aws_sso_oidc_url(sso_region)
+        from extensions.cloud_connector import require_cloud_route
+        require_cloud_route(url)
         
         # IMPORTANT: AWS SSO OIDC CreateToken API requires:
         # 1. JSON payload (not form-urlencoded)
@@ -816,31 +918,22 @@ class KiroAuthManager:
         
         headers = {
             "Content-Type": "application/json",
+            "User-Agent": user_agent(),
         }
         
         # Log request details (without secrets) for debugging
         logger.debug(f"AWS SSO OIDC refresh request: url={url}, sso_region={sso_region}, "
                      f"api_region={self._region}, client_id={self._client_id[:8]}...")
         
+        generation = self.credential_generation
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(url, json=payload, headers=headers)
             
-            # Log response details for debugging (especially on errors)
             if response.status_code != 200:
-                error_body = response.text
-                logger.error(f"AWS SSO OIDC refresh failed: status={response.status_code}, "
-                             f"body={error_body}")
-                # Try to parse AWS error for more details
-                try:
-                    error_json = response.json()
-                    error_code = error_json.get("error", "unknown")
-                    error_desc = error_json.get("error_description", "no description")
-                    logger.error(f"AWS SSO OIDC error details: error={error_code}, "
-                                 f"description={error_desc}")
-                except Exception:
-                    pass  # Body wasn't JSON, already logged as text
+                # Error bodies may echo credentials; log only the HTTP status.
+                logger.error(f"AWS SSO OIDC refresh failed: status={response.status_code}")
                 response.raise_for_status()
-            
+
             result = response.json()
         
         # AWS SSO OIDC CreateToken API returns camelCase fields
@@ -849,15 +942,18 @@ class KiroAuthManager:
         expires_in = result.get("expiresIn", 3600)
         
         if not new_access_token:
-            raise ValueError(f"AWS SSO OIDC response does not contain accessToken: {result}")
+            raise ValueError("AWS SSO OIDC response does not contain accessToken")
         
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in - 60)
+        self._check_refresh_generation(generation)
+
         # Update data
         self._access_token = new_access_token
         if new_refresh_token:
             self._refresh_token = new_refresh_token
         
         # Calculate expiration time with buffer (minus 60 seconds)
-        self._expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in - 60)
+        self._expires_at = expires_at
         
         logger.info(f"Token refreshed via AWS SSO OIDC, expires: {self._expires_at.isoformat()}")
         
@@ -946,6 +1042,19 @@ class KiroAuthManager:
             await self._refresh_token_request()
             return self._access_token
     
+    @property
+    def credential_generation(self) -> str:
+        """Return a non-secret, per-manager credential binding snapshot.
+
+        Compare before conversion and after token acquisition. External loader
+        changes invalidate the snapshot; unchanged reloads and this manager's
+        successful OAuth refreshes preserve it. This is deliberately conservative
+        (another process's token rotation may advance it), not verified principal
+        identity. Reading this property performs no I/O; disk changes are noticed
+        only when a loader reads them. Keys are not stable across manager restarts.
+        """
+        return self._credential_identity.binding_key
+
     @property
     def profile_arn(self) -> Optional[str]:
         """AWS CodeWhisperer profile ARN."""

@@ -27,6 +27,7 @@ to the unified format used by converters_core.py.
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from kiro.native_reasoning import reasoning_blocks
 
 from kiro.config import HIDDEN_MODELS
 from kiro.model_resolver import get_model_id_for_kiro
@@ -323,6 +324,7 @@ def convert_anthropic_messages(
             tool_calls=tool_calls if tool_calls else None,
             tool_results=tool_results if tool_results else None,
             images=images if images else None,
+            native_blocks=reasoning_blocks(content) if role == "assistant" else None,
         )
         unified_messages.append(unified_msg)
 

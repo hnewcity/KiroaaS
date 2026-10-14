@@ -234,21 +234,21 @@ class TestBinaryEventStreamDecoding:
         events = feed_all(parser, [frame[:char_offset + 1], frame[char_offset + 1:char_offset + 2], frame[char_offset + 2:]])
         assert contents(events) == "中文"
 
-    def test_deduplicates_repeated_content(self, aws_event_parser):
+    def test_preserves_identical_binary_deltas(self, aws_event_parser):
         """
         What it does: Sends the same content in two consecutive frames.
         Goal: Ensure existing dedup behavior applies to binary frames.
         """
         events = aws_event_parser.feed(content_frame("same") + content_frame("same") + content_frame("next"))
-        assert contents(events) == "samenext"
+        assert contents(events) == "samesamenext"
 
-    def test_ignores_assistant_event_without_content(self, aws_event_parser):
+    def test_retains_model_metadata_without_empty_content(self, aws_event_parser):
         """
         What it does: Sends an assistantResponseEvent carrying only metadata.
         Goal: Ensure no empty content event is emitted.
         """
         events = aws_event_parser.feed(event_frame("assistantResponseEvent", {"modelId": "claude"}))
-        assert events == []
+        assert events == [{"type": "model_metadata", "data": "claude"}]
 
     def test_unknown_event_type_falls_back_to_key_detection(self, aws_event_parser):
         """
@@ -307,7 +307,9 @@ class TestBinaryToolUseEvents:
         Goal: Ensure fragments are joined into one tool call with valid arguments.
         """
         stream = self._tool_frames("t1", "get_weather", ['{"city":', '"北京"', "}"])
-        assert aws_event_parser.feed(stream) == []
+        emitted = aws_event_parser.feed(stream)
+        assert emitted[0]["type"] == "tool_batch"
+        assert emitted[0]["data"][0]["id"] == "t1"
         calls = aws_event_parser.get_tool_calls()
         assert len(calls) == 1
         assert calls[0]["id"] == "t1"
@@ -375,14 +377,14 @@ class TestBinaryMeteringEvents:
         events = aws_event_parser.feed(event_frame("meteringEvent", 0.5))
         assert events == [{"type": "usage", "data": {"usage": 0.5}}]
 
-    def test_logs_raw_metering_payload_at_debug(self, aws_event_parser):
+    def test_logs_metering_field_names_at_debug(self, aws_event_parser):
         """
-        What it does: Checks the raw metering payload is logged.
+        What it does: Checks field-name diagnostics without dumping upstream values.
         Goal: Ensure metering diagnostics are available at DEBUG level.
         """
         with _patch("extensions.kiro_stream_decoder.logger") as mock_logger:
             aws_event_parser.feed(event_frame("meteringEvent", {"usage": 1, "cacheReadInputTokens": 9}))
-        logged = " ".join(str(c.args[0]) for c in mock_logger.debug.call_args_list)
+        logged = " ".join(str(c.args) for c in mock_logger.debug.call_args_list)
         assert "cacheReadInputTokens" in logged
 
 

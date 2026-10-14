@@ -103,6 +103,7 @@ impl ServerManager {
         }
 
         cmd.env("TAURI_MANAGED", "true")
+            .env("KIROAAS_APP_VERSION", env!("CARGO_PKG_VERSION"))
             .env("PROXY_API_KEY", &config.proxy_api_key)
             .env("SERVER_HOST", &config.server_host)
             .env("SERVER_PORT", config.server_port.to_string())

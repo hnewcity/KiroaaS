@@ -51,9 +51,7 @@ a = Analysis(
         # httpx dependencies
         'httpx',
         'h11',
-        'h2',
-        'hpack',
-        'hyperframe',
+        # The configured transports use HTTP/1.1; do not force optional HTTP/2 packages.
         # loguru
         'loguru',
         # Other dependencies

@@ -129,6 +129,10 @@ def stream_exception_status(error: KiroStreamError) -> Tuple[int, str]:
     """
     if error.exception_type == "ContentFilteredException":
         return 400, "invalid_request_error"
+    if error.exception_type == "RequestTimeoutException":
+        return 504, "api_error"
+    if error.exception_type in ("InvalidNativeStreamException", "InvalidReasoningEvent"):
+        return 502, "api_error"
     return 529, "overloaded_error"
 
 
@@ -382,6 +386,19 @@ class ClientCompatMiddleware:
             return
 
         state, token = start_request_state()
+        from extensions.session_identity import read_identity_headers
+        try:
+            identity_headers = read_identity_headers(scope.get("headers", []))
+        except ValueError as error:
+            body = {"type": "error", "error": {"type": "invalid_request_error", "message": str(error)}}
+            from starlette.responses import JSONResponse
+            try:
+                await JSONResponse(body, status_code=400)(scope, receive, send)
+            finally:
+                reset_request_state(token)
+            return
+        for name, value in identity_headers.items():
+            setattr(state, name, value)
         start_message: Optional[Dict[str, Any]] = None
         buffered: List[bytes] = []
         mode = "passthrough"  # passthrough | buffer-error | sse
@@ -407,6 +424,8 @@ class ClientCompatMiddleware:
                         return
                     await self._send_error(path, start_message, b"".join(buffered), state, scope, send)
                     return
+                if mode == "sse" and state.retry_budget is not None:
+                    state.retry_budget.observe_output(message.get("body", b""))
                 if mode == "sse" and path == ANTHROPIC_PATH:
                     chunk = message.get("body", b"")
                     if chunk.startswith(b"event: error"):

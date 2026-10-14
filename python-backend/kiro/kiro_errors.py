@@ -35,6 +35,8 @@ Example:
     "Model context limit reached. Conversation size exceeds model capacity."
 """
 
+import re
+
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, Any
@@ -70,8 +72,9 @@ def enhance_kiro_error(error_json: Dict[str, Any]) -> KiroErrorInfo:
     
     Args:
         error_json: Parsed JSON from Kiro API error response
-                   Expected format: {"message": "...", "reason": "..."}
-                   The "reason" field is optional.
+                   Accepts Generate {"message": "...", "reason": "..."} or
+                   Responses {"error": {"message": "...", "code": "..."}}.
+                   Reason/code fields are optional; malformed shapes are ignored.
     
     Returns:
         KiroErrorInfo with enhanced message and original details
@@ -90,14 +93,23 @@ def enhance_kiro_error(error_json: Dict[str, Any]) -> KiroErrorInfo:
         >>> print(error_info.user_message)
         "Something went wrong. (reason: UNKNOWN_REASON)"
     """
-    # Extract original message and reason from Kiro API response
-    # Handle None values explicitly (preserve empty strings)
-    original_message = error_json.get("message")
-    if original_message is None:
+    # Responses returns a nested error object, unlike Generate's flat body.
+    # Inspect only known scalar fields; do not stringify arbitrary error payloads.
+    envelope = error_json if isinstance(error_json, dict) else {}
+    nested = envelope.get("error")
+    source = nested if isinstance(nested, dict) else envelope
+    original_message = source.get("message")
+    if not isinstance(original_message, str):
+        original_message = envelope.get("message")
+    if not isinstance(original_message, str):
         original_message = "Unknown error"
-    
-    reason = error_json.get("reason")
-    if reason is None:
+
+    reason = source.get("reason")
+    if reason is None and isinstance(nested, dict):
+        reason = source.get("code")
+        if reason is None:
+            reason = source.get("type")
+    if not isinstance(reason, str):
         reason = "UNKNOWN"
     
     # Map known reasons to user-friendly messages
@@ -129,11 +141,17 @@ def enhance_kiro_error(error_json: Dict[str, Any]) -> KiroErrorInfo:
     else:
         # Unknown error or no enhancement available
         # Keep original message and append reason if present
-        if "reason" in error_json and reason != "UNKNOWN":
+        if reason != "UNKNOWN":
             user_message = f"{original_message} (reason: {reason})"
         else:
             user_message = original_message
     
+    # Responses may identify the rejected field separately from its generic
+    # message. Preserve a bounded field path, never an arbitrary structured value.
+    parameter = source.get("param") if isinstance(nested, dict) else None
+    if isinstance(parameter, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.\[\]-]{0,127}", parameter):
+        user_message += f" (parameter: {parameter})"
+
     return KiroErrorInfo(
         reason=reason,
         user_message=user_message,

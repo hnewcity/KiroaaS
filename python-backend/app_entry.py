@@ -28,6 +28,10 @@ from extensions.upstream_defaults import apply_upstream_defaults
 
 apply_upstream_defaults()
 
+from extensions.protocol_runtime import validate_protocol_settings
+
+validate_protocol_settings()
+
 # Widen AnthropicMessage.role BEFORE importing main. FastAPI compiles and
 # caches each route's body validator when the @router.post decorators run,
 # which happens while `from main import app` imports the route modules. If we
@@ -70,6 +74,7 @@ from extensions.billing_header_strip import install_billing_header_strip
 from extensions.kiro_stream_decoder import install_kiro_stream_decoder
 from extensions.kiro_payload_builder import install_kiro_payload_builder
 from extensions.upstream_retry import install_upstream_retry
+from extensions.upstream_account import install_upstream_account_context
 from extensions.client_compat import install_client_compat
 
 
@@ -93,6 +98,7 @@ install_billing_header_strip()
 install_kiro_stream_decoder()
 install_kiro_payload_builder()
 install_upstream_retry()
+install_upstream_account_context()
 install_client_compat(app)
 # Dash-format Claude model IDs on /v1/models for Claude-family clients. Added as
 # a response middleware (Starlette builds the stack lazily at startup, so adding

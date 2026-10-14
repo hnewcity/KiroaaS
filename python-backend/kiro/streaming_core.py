@@ -32,8 +32,9 @@ to convert Kiro events to their respective SSE formats.
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable, Awaitable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, AsyncIterator, AsyncGenerator, Callable, Awaitable, Dict, List, Optional, Tuple
 
+import time
 import httpx
 from loguru import logger
 
@@ -45,6 +46,7 @@ from kiro.config import (
     FAKE_REASONING_HANDLING,
 )
 from kiro.thinking_parser import ThinkingParser
+from kiro.native_reasoning import NativeMessageLedger
 
 if TYPE_CHECKING:
     from kiro.cache import ModelInfoCache
@@ -80,6 +82,9 @@ class KiroEvent:
     type: str
     content: Optional[str] = None
     thinking_content: Optional[str] = None
+    reasoning: Optional[Dict[str, str]] = None
+    native_index: Optional[int] = None
+    resolved_model_id: Optional[str] = None
     tool_use: Optional[Dict[str, Any]] = None
     usage: Optional[Dict[str, Any]] = None
     context_usage_percentage: Optional[float] = None
@@ -101,9 +106,21 @@ class StreamResult:
     """
     content: str = ""
     thinking_content: str = ""
+    native_thinking_content: str = ""
+    resolved_model_id: Optional[str] = None
+    native_blocks: List[Dict[str, Any]] = field(default_factory=list)
+    completed: bool = False
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     usage: Optional[Dict[str, Any]] = None
     context_usage_percentage: Optional[float] = None
+
+
+class StreamDeadlineExceeded(TimeoutError):
+    """The request-wide elapsed-time budget expired while reading its body."""
+
+
+class StreamIdleTimeoutError(TimeoutError):
+    """The upstream body stopped producing bytes beyond its read-idle allowance."""
 
 
 class FirstTokenTimeoutError(Exception):
@@ -138,8 +155,40 @@ async def parse_kiro_stream(
         FirstTokenTimeoutError: If first token not received within timeout
     """
     parser = AwsEventStreamParser()
+    response_headers = getattr(response, "headers", None)
+    content_type = response_headers.get("content-type", "") if isinstance(response_headers, (dict, httpx.Headers)) else ""
+    if "application/vnd.amazon.eventstream" in content_type.lower() and hasattr(parser, "expect_binary"):
+        parser.expect_binary()
+    emitted_tool_ids: set = set()
     first_token_received = False
-    
+    extensions = getattr(response, "extensions", {})
+    deadline = extensions.get("kiro_request_deadline") if isinstance(extensions, dict) else None
+
+    from kiro.config import STREAMING_READ_TIMEOUT
+    idle_timeout = extensions.get("kiro_stream_idle_timeout", STREAMING_READ_TIMEOUT) if isinstance(extensions, dict) else STREAMING_READ_TIMEOUT
+    stream_deadline = extensions.get("kiro_stream_deadline") if isinstance(extensions, dict) else None
+
+    async def read_chunk(iterator: AsyncIterator[bytes]) -> bytes:
+        now = time.monotonic()
+        # The shared retry budget bounds waiting for an attempt to start, not the
+        # duration of a successful active generation. CLI raw Responses clears
+        # its request timeout after headers and uses a separate idle watchdog.
+        active_deadlines = [value for value in (stream_deadline, deadline if not first_token_received else None) if value is not None]
+        remaining = min(active_deadlines) - now if active_deadlines else None
+        if remaining is not None and remaining <= 0:
+            raise StreamDeadlineExceeded("Kiro request exceeded its configured waiting/stream deadline")
+        phase_timeout = idle_timeout if first_token_received else first_token_timeout
+        timeout = min(phase_timeout, remaining) if remaining is not None else phase_timeout
+        absolute_selected = remaining is not None and remaining <= phase_timeout
+        try:
+            return await asyncio.wait_for(iterator.__anext__(), timeout=timeout)
+        except asyncio.TimeoutError as error:
+            if absolute_selected:
+                raise StreamDeadlineExceeded("Kiro request exceeded its configured waiting/stream deadline") from error
+            if first_token_received:
+                raise StreamIdleTimeoutError(f"Kiro stream was idle for {idle_timeout:g} seconds") from error
+            raise FirstTokenTimeoutError(f"No response bytes within {first_token_timeout:g} seconds") from error
+
     # Initialize thinking parser if fake reasoning is enabled
     thinking_parser: Optional[ThinkingParser] = None
     if FAKE_REASONING_ENABLED and enable_thinking_parser:
@@ -153,11 +202,11 @@ async def parse_kiro_stream(
         # Wait for first chunk with timeout
         try:
             logger.debug(f"Waiting for first token (timeout={first_token_timeout}s)...")
-            first_byte_chunk = await asyncio.wait_for(
-                byte_iterator.__anext__(),
-                timeout=first_token_timeout
-            )
-            logger.debug("First token received")
+            first_byte_chunk = await read_chunk(byte_iterator)
+            first_token_received = True
+            logger.debug("First response bytes received")
+        except StreamDeadlineExceeded:
+            raise
         except asyncio.TimeoutError:
             logger.warning(f"[FirstTokenTimeout] Model did not respond within {first_token_timeout}s")
             raise FirstTokenTimeoutError(f"No response within {first_token_timeout} seconds")
@@ -171,18 +220,27 @@ async def parse_kiro_stream(
             debug_logger.log_raw_chunk(first_byte_chunk)
         
         async for event in _process_chunk(parser, first_byte_chunk, thinking_parser):
-            if event.type == "content" or event.type == "thinking":
-                first_token_received = True
+            if event.type == "tool_use" and event.tool_use:
+                emitted_tool_ids.add(event.tool_use.get("id"))
             yield event
         
         # Continue reading remaining chunks
-        async for chunk in byte_iterator:
+        while True:
+            try:
+                chunk = await read_chunk(byte_iterator)
+            except StopAsyncIteration:
+                break
             if debug_logger:
                 debug_logger.log_raw_chunk(chunk)
             
             async for event in _process_chunk(parser, chunk, thinking_parser):
+                if event.type == "tool_use" and event.tool_use:
+                    emitted_tool_ids.add(event.tool_use.get("id"))
                 yield event
         
+        if hasattr(parser, "finish"):
+            parser.finish()
+
         # Finalize thinking parser and yield any remaining content
         if thinking_parser:
             final_result = thinking_parser.finalize()
@@ -213,7 +271,8 @@ async def parse_kiro_stream(
         
         # Yield tool calls if any
         for tc in all_tool_calls:
-            yield KiroEvent(type="tool_use", tool_use=tc)
+            if tc.get("id") not in emitted_tool_ids:
+                yield KiroEvent(type="tool_use", tool_use=tc)
             
     except FirstTokenTimeoutError:
         raise
@@ -223,8 +282,11 @@ async def parse_kiro_stream(
     except Exception as e:
         error_type = type(e).__name__
         error_msg = str(e) if str(e) else "(empty message)"
-        logger.error(f"Error during stream parsing: [{error_type}] {error_msg}", exc_info=True)
+        logger.error("Error during stream parsing: {}", error_type)
         raise
+    finally:
+        if getattr(response, "is_closed", False) is not True:
+            await response.aclose()
 
 
 async def _process_chunk(
@@ -246,7 +308,11 @@ async def _process_chunk(
     events = parser.feed(chunk)
     
     for event in events:
-        if event["type"] == "content":
+        if event.get("model_id"):
+            yield KiroEvent(type="model_metadata", resolved_model_id=event["model_id"])
+        if event["type"] == "model_metadata":
+            yield KiroEvent(type="model_metadata", resolved_model_id=event["data"])
+        elif event["type"] == "content":
             content = event["data"]
             
             # Process through thinking parser if enabled
@@ -275,6 +341,13 @@ async def _process_chunk(
                 # No thinking parser - pass through as-is
                 yield KiroEvent(type="content", content=content)
         
+        elif event["type"] == "native_reasoning":
+            yield KiroEvent(type="native_reasoning", reasoning=event["data"])
+        elif event["type"] == "tool_use":
+            yield KiroEvent(type="tool_use", tool_use=event["data"])
+        elif event["type"] == "tool_batch":
+            for tool in event["data"]:
+                yield KiroEvent(type="tool_use", tool_use=tool)
         elif event["type"] == "usage":
             yield KiroEvent(type="usage", usage=event["data"])
         
@@ -306,15 +379,21 @@ async def collect_stream_to_result(
         StreamResult with full content, thinking, tool calls, and usage
     """
     result = StreamResult()
+    native_ledger = NativeMessageLedger()
     full_content_for_bracket_tools = ""
     
     async for event in parse_kiro_stream(response, first_token_timeout, enable_thinking_parser):
-        if event.type == "content" and event.content:
+        native_ledger.feed(event)
+        if event.type == "model_metadata":
+            result.resolved_model_id = event.resolved_model_id
+        elif event.type == "content" and event.content:
             result.content += event.content
             full_content_for_bracket_tools += event.content
         elif event.type == "thinking" and event.thinking_content:
             result.thinking_content += event.thinking_content
             full_content_for_bracket_tools += event.thinking_content
+        elif event.type == "native_reasoning" and event.reasoning:
+            result.native_thinking_content += event.reasoning.get("text", "")
         elif event.type == "tool_use" and event.tool_use:
             result.tool_calls.append(event.tool_use)
         elif event.type == "usage" and event.usage:
@@ -327,6 +406,9 @@ async def collect_stream_to_result(
     if bracket_tool_calls:
         result.tool_calls = deduplicate_tool_calls(result.tool_calls + bracket_tool_calls)
     
+    if native_ledger.has_native:
+        result.native_blocks = native_ledger.blocks
+    result.completed = response.extensions.get("kiro_stream_completed") is True if isinstance(getattr(response, "extensions", None), dict) else False
     return result
 
 
@@ -446,7 +528,7 @@ async def stream_with_first_token_retry(
                 except Exception:
                     pass
                 
-                logger.error(f"Error from Kiro API: {response.status_code} - {error_text}")
+                logger.error("Kiro API returned HTTP {}; diagnostic body omitted", response.status_code)
                 
                 if on_http_error:
                     raise on_http_error(response.status_code, error_text)
@@ -482,7 +564,7 @@ async def stream_with_first_token_retry(
             # Use positional argument to avoid loguru interpreting curly braces in error message as format placeholders
             # f-string with repr() doesn't work because loguru still sees {type} inside the string
             error_msg = str(e) if str(e) else "(empty message)"
-            logger.error("Unexpected error during streaming: {}", error_msg, exc_info=True)
+            logger.error("Unexpected streaming exception: {}", type(e).__name__)
             if response:
                 try:
                     await response.aclose()

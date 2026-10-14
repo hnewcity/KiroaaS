@@ -30,7 +30,10 @@ Uses streaming_core.py for parsing Kiro stream into unified KiroEvent objects.
 
 import json
 import time
-from typing import TYPE_CHECKING, AsyncGenerator, Callable, Awaitable, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable, Awaitable, Dict, Optional
+
+from kiro.native_reasoning import NativeProjectionRecorder, reasoning_blocks
+from kiro.usage import authoritative_usage
 
 import httpx
 from fastapi import HTTPException
@@ -115,13 +118,15 @@ async def stream_kiro_to_openai_internal(
         data: [DONE]
     """
     completion_id = generate_completion_id()
+    native_projection = NativeProjectionRecorder(anthropic=False)
     created_time = int(time.time())
     first_chunk = True
     
-    metering_data = None
+    metering_data: Dict[str, Any] = {}
     context_usage_percentage = None
     full_content = ""
     full_thinking_content = ""  # Accumulated thinking content for non-streaming
+    resolved_model_id: Optional[str] = None
     
     streaming_error_occurred = False
     tool_calls_from_stream = []
@@ -130,7 +135,9 @@ async def stream_kiro_to_openai_internal(
         # Use streaming_core.parse_kiro_stream for unified event parsing
         # This handles AWS SSE parsing, first token timeout, and thinking parser
         async for event in parse_kiro_stream(response, first_token_timeout):
-            if event.type == "content" and event.content:
+            if event.type == "model_metadata":
+                resolved_model_id = event.resolved_model_id
+            elif event.type == "content" and event.content:
                 # Accumulate content for bracket tool call detection
                 full_content += event.content
                 
@@ -153,8 +160,29 @@ async def stream_kiro_to_openai_internal(
                 if debug_logger:
                     debug_logger.log_modified_chunk(chunk_text.encode('utf-8'))
                 
+                native_projection.observe_openai(openai_chunk)
                 yield chunk_text
             
+            elif event.type == "native_reasoning" and event.reasoning:
+                data = event.reasoning
+                full_thinking_content += data.get("text", "")
+                if "redactedContent" in data:
+                    detail = {"type": "redacted_thinking", "data": data["redactedContent"], "index": event.native_index or 0}
+                else:
+                    detail = {"type": "thinking", "thinking": data.get("text", ""),
+                              "signature": data.get("signature", ""), "index": event.native_index or 0}
+                delta = {"reasoning_details": [detail]}
+                if "text" in data:
+                    delta["reasoning_content"] = data["text"]
+                if first_chunk:
+                    delta["role"] = "assistant"
+                    first_chunk = False
+                chunk = {"id": completion_id, "object": "chat.completion.chunk",
+                         "created": created_time, "model": model,
+                         "choices": [{"index": 0, "delta": delta, "finish_reason": None}]}
+                native_projection.observe_openai(chunk)
+                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
             elif event.type == "thinking" and event.thinking_content:
                 # Accumulate thinking content
                 full_thinking_content += event.thinking_content
@@ -182,6 +210,7 @@ async def stream_kiro_to_openai_internal(
                 if debug_logger:
                     debug_logger.log_modified_chunk(chunk_text.encode('utf-8'))
                 
+                native_projection.observe_openai(openai_chunk)
                 yield chunk_text
             
             elif event.type == "tool_use" and event.tool_use:
@@ -251,10 +280,15 @@ async def stream_kiro_to_openai_internal(
                                 if debug_logger:
                                     debug_logger.log_modified_chunk(chunk_text.encode('utf-8'))
                                 
+                                native_projection.observe_openai(openai_chunk)
                                 yield chunk_text
                             
                             # Accumulate for token counting
                             full_content += summary
+                            native_projection.web_search(
+                                tool.get("id") or tool.get("toolUseId") or "",
+                                mcp_tool_use_id, query, results, summary,
+                            )
                             
                             # Skip normal tool_use processing
                             continue
@@ -263,15 +297,21 @@ async def stream_kiro_to_openai_internal(
                 tool_calls_from_stream.append(event.tool_use)
             
             elif event.type == "usage" and event.usage:
-                metering_data = event.usage
+                if isinstance(event.usage, dict):
+                    metering_data.update(event.usage)
+                elif isinstance(event.usage, (int, float)):
+                    metering_data["usage"] = event.usage
             
             elif event.type == "context_usage" and event.context_usage_percentage is not None:
                 context_usage_percentage = event.context_usage_percentage
         
         # Track completion signals for truncation detection
-        received_usage = metering_data is not None
+        received_usage = bool(metering_data)
         received_context_usage = context_usage_percentage is not None
-        stream_completed_normally = received_usage or received_context_usage
+        stream_completed_normally = (
+            received_usage or received_context_usage
+            or (isinstance(getattr(response, "extensions", None), dict) and response.extensions.get("kiro_stream_completed") is True)
+        )
         
         # Check bracket-style tool calls in full content
         bracket_tool_calls = parse_bracket_tool_calls(full_content)
@@ -360,6 +400,7 @@ async def stream_kiro_to_openai_internal(
                     "finish_reason": None
                 }]
             }
+            native_projection.observe_openai(tool_calls_chunk)
             yield f"data: {json.dumps(tool_calls_chunk, ensure_ascii=False)}\n\n"
         
         # Save truncation info for recovery (tracked by stable identifiers)
@@ -395,6 +436,7 @@ async def stream_kiro_to_openai_internal(
             "created": created_time,
             "model": model,
             "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
+            **({"kiro_upstream_model": resolved_model_id} if resolved_model_id else {}),
             "usage": {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
@@ -402,8 +444,10 @@ async def stream_kiro_to_openai_internal(
             }
         }
         
-        if metering_data:
-            final_chunk["usage"]["credits_used"] = metering_data
+        public_metering = {key: value for key, value in metering_data.items() if key != "_responses_usage"}
+        if public_metering:
+            final_chunk["usage"]["credits_used"] = public_metering
+        final_chunk["usage"].update(authoritative_usage(metering_data, "openai"))
         
         # Log final token values being sent to client
         logger.debug(
@@ -413,6 +457,7 @@ async def stream_kiro_to_openai_internal(
             f"total_tokens={total_tokens} ({total_source})"
         )
         
+        native_projection.finish()
         yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
         
@@ -602,6 +647,8 @@ async def collect_stream_response(
     """
     full_content = ""
     full_reasoning_content = ""
+    native_details = []
+    resolved_model_id = None
     final_usage = None
     tool_calls = []
     finish_reason = "stop"  # Default fallback
@@ -625,13 +672,16 @@ async def collect_stream_response(
         
         try:
             chunk_data = json.loads(data_str)
-            
+            if isinstance(chunk_data.get("kiro_upstream_model"), str):
+                resolved_model_id = chunk_data["kiro_upstream_model"]
             # Extract data from chunk
             delta = chunk_data.get("choices", [{}])[0].get("delta", {})
             if "content" in delta:
                 full_content += delta["content"]
             if "reasoning_content" in delta:
                 full_reasoning_content += delta["reasoning_content"]
+            if "reasoning_details" in delta:
+                native_details.extend(delta["reasoning_details"])
             if "tool_calls" in delta:
                 tool_calls.extend(delta["tool_calls"])
             
@@ -651,6 +701,8 @@ async def collect_stream_response(
     message = {"role": "assistant", "content": full_content}
     if full_reasoning_content:
         message["reasoning_content"] = full_reasoning_content
+    if native_details:
+        message["reasoning_details"] = reasoning_blocks(native_details, include_unsigned=True)
     if tool_calls:
         # For non-streaming response remove index field from tool_calls,
         # as it's only required for streaming chunks
@@ -684,5 +736,6 @@ async def collect_stream_response(
             "message": message,
             "finish_reason": finish_reason
         }],
-        "usage": usage
+        "usage": usage,
+        **({"kiro_upstream_model": resolved_model_id} if resolved_model_id else {}),
     }

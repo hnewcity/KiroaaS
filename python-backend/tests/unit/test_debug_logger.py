@@ -1,690 +1,419 @@
-# -*- coding: utf-8 -*-
+"""Offline tests for privacy-safe debug modes, persistence, and cleanup."""
 
-"""
-Unit-тесты для DebugLogger.
-Проверяет логику буферизации и записи debug логов в разных режимах.
-"""
+from __future__ import annotations
 
+import hashlib
 import json
-import pytest
+from collections.abc import Iterator
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from typing import Any
+from unittest.mock import patch
+
+import pytest
+from loguru import logger as app_logger
+
+import kiro.debug_logger as debug_module
+from kiro.debug_logger import DebugLogger
+from kiro.debug_redaction import REDACTED
+
+SECRET = "synthetic-private-native-value-29ae6b"
+REQUEST = json.dumps({
+    "model": "test-model", "accessToken": SECRET,
+    "messages": [{"content": [
+        {"type": "thinking", "thinking": "Useful diagnostic text", "signature": SECRET},
+        {"type": "redacted_thinking", "data": SECRET},
+    ]}],
+    "output": [{"type": "reasoning", "encrypted_content": SECRET}],
+}).encode()
+MODIFIED = b'data: {"delta":{"type":"signature_delta","signature":"' + SECRET.encode() + b'"}}\n\n'
 
 
-class TestDebugLoggerModeOff:
-    """Тесты для режима DEBUG_MODE=off."""
-    
-    def test_prepare_new_request_does_nothing(self, tmp_path):
-        """
-        Что он делает: Проверяет, что prepare_new_request ничего не делает в режиме off.
-        Цель: Убедиться, что в режиме off директория не создаётся.
-        """
-        print("Настройка: Режим off...")
-        with patch('kiro.debug_logger.DEBUG_MODE', 'off'):
-            with patch('kiro.debug_logger.DEBUG_DIR', str(tmp_path / "debug_logs")):
-                # Пересоздаём экземпляр с новыми настройками
-                from kiro.debug_logger import DebugLogger
-                logger = DebugLogger.__new__(DebugLogger)
-                logger._initialized = False
-                logger.__init__()
-                logger.debug_dir = tmp_path / "debug_logs"
-                
-                print("Действие: Вызов prepare_new_request...")
-                logger.prepare_new_request()
-                
-                print(f"Проверяем, что директория не создана...")
-                assert not (tmp_path / "debug_logs").exists()
-    
-    def test_log_request_body_does_nothing(self, tmp_path):
-        """
-        Что он делает: Проверяет, что log_request_body ничего не делает в режиме off.
-        Цель: Убедиться, что данные не записываются.
-        """
-        print("Настройка: Режим off...")
-        with patch('kiro.debug_logger.DEBUG_MODE', 'off'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            logger.debug_dir = tmp_path / "debug_logs"
-            
-            print("Действие: Вызов log_request_body...")
-            logger.log_request_body(b'{"test": "data"}')
-            
-            print(f"Проверяем, что файл не создан...")
-            assert not (tmp_path / "debug_logs" / "request_body.json").exists()
+@pytest.fixture
+def debug(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[DebugLogger]:
+    """Use an independent logger and temporary directory, never the global sink."""
+    monkeypatch.setattr(debug_module, "DEBUG_MODE", "errors")
+    monkeypatch.setattr(debug_module, "DEBUG_DIR", str(tmp_path / "debug_logs"))
+    instance = object.__new__(DebugLogger)
+    instance._initialized = False
+    instance.__init__()
+    yield instance
+    instance._clear_buffers()
 
 
-class TestDebugLoggerModeAll:
-    """Тесты для режима DEBUG_MODE=all."""
-    
-    def test_prepare_new_request_clears_directory(self, tmp_path):
-        """
-        Что он делает: Проверяет, что prepare_new_request очищает директорию в режиме all.
-        Цель: Убедиться, что старые логи удаляются.
-        """
-        print("Настройка: Режим all, создаём старый файл...")
-        debug_dir = tmp_path / "debug_logs"
-        debug_dir.mkdir()
-        old_file = debug_dir / "old_file.txt"
-        old_file.write_text("old content")
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'all'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            logger.debug_dir = debug_dir
-            
-            print("Действие: Вызов prepare_new_request...")
-            logger.prepare_new_request()
-            
-            print(f"Проверяем, что старый файл удалён...")
-            assert not old_file.exists()
-            print(f"Проверяем, что директория существует...")
-            assert debug_dir.exists()
-    
-    def test_log_request_body_writes_immediately(self, tmp_path):
-        """
-        Что он делает: Проверяет, что log_request_body пишет сразу в файл в режиме all.
-        Цель: Убедиться, что данные записываются немедленно.
-        """
-        print("Настройка: Режим all...")
-        debug_dir = tmp_path / "debug_logs"
-        debug_dir.mkdir()
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'all'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            logger.debug_dir = debug_dir
-            
-            print("Действие: Вызов log_request_body...")
-            test_data = b'{"model": "test", "messages": []}'
-            logger.log_request_body(test_data)
-            
-            print(f"Проверяем, что файл создан...")
-            file_path = debug_dir / "request_body.json"
-            assert file_path.exists()
-            
-            print(f"Проверяем содержимое файла...")
-            content = json.loads(file_path.read_text())
-            assert content["model"] == "test"
-    
-    def test_log_kiro_request_body_writes_immediately(self, tmp_path):
-        """
-        Что он делает: Проверяет, что log_kiro_request_body пишет сразу в файл в режиме all.
-        Цель: Убедиться, что Kiro payload записывается немедленно.
-        """
-        print("Настройка: Режим all...")
-        debug_dir = tmp_path / "debug_logs"
-        debug_dir.mkdir()
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'all'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            logger.debug_dir = debug_dir
-            
-            print("Действие: Вызов log_kiro_request_body...")
-            test_data = b'{"conversationState": {}}'
-            logger.log_kiro_request_body(test_data)
-            
-            print(f"Проверяем, что файл создан...")
-            file_path = debug_dir / "kiro_request_body.json"
-            assert file_path.exists()
-    
-    def test_log_raw_chunk_appends_to_file(self, tmp_path):
-        """
-        Что он делает: Проверяет, что log_raw_chunk дописывает в файл в режиме all.
-        Цель: Убедиться, что чанки накапливаются.
-        """
-        print("Настройка: Режим all...")
-        debug_dir = tmp_path / "debug_logs"
-        debug_dir.mkdir()
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'all'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            logger.debug_dir = debug_dir
-            
-            print("Действие: Вызов log_raw_chunk дважды...")
-            logger.log_raw_chunk(b'chunk1')
-            logger.log_raw_chunk(b'chunk2')
-            
-            print(f"Проверяем содержимое файла...")
-            file_path = debug_dir / "response_stream_raw.txt"
-            content = file_path.read_bytes()
-            assert content == b'chunk1chunk2'
+def buffer_bytes(debug: DebugLogger) -> bytes:
+    """Snapshot every logger-owned diagnostic buffer before file persistence."""
+    return b"\n".join((
+        debug._request_body_buffer or b"",
+        debug._kiro_request_body_buffer or b"",
+        bytes(debug._raw_chunks_buffer),
+        bytes(debug._modified_chunks_buffer),
+        debug._app_logs_buffer.getvalue().encode(),
+    ))
 
 
-class TestDebugLoggerModeErrors:
-    """Тесты для режима DEBUG_MODE=errors."""
-    
-    def test_log_request_body_buffers_data(self, tmp_path):
-        """
-        Что он делает: Проверяет, что log_request_body буферизует данные в режиме errors.
-        Цель: Убедиться, что данные не записываются сразу.
-        """
-        print("Настройка: Режим errors...")
-        debug_dir = tmp_path / "debug_logs"
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'errors'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            logger.debug_dir = debug_dir
-            
-            print("Действие: Вызов log_request_body...")
-            test_data = b'{"test": "buffered"}'
-            logger.log_request_body(test_data)
-            
-            print(f"Проверяем, что файл НЕ создан...")
-            assert not debug_dir.exists()
-            
-            print(f"Проверяем, что данные в буфере...")
-            assert logger._request_body_buffer == test_data
-    
-    def test_flush_on_error_writes_buffers(self, tmp_path):
-        """
-        Что он делает: Проверяет, что flush_on_error записывает буферы в файлы.
-        Цель: Убедиться, что при ошибке данные сохраняются.
-        """
-        print("Настройка: Режим errors, заполняем буферы...")
-        debug_dir = tmp_path / "debug_logs"
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'errors'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            logger.debug_dir = debug_dir
-            
-            # Заполняем буферы
-            logger.log_request_body(b'{"request": "body"}')
-            logger.log_kiro_request_body(b'{"kiro": "request"}')
-            logger.log_raw_chunk(b'raw_chunk')
-            logger.log_modified_chunk(b'modified_chunk')
-            
-            print("Действие: Вызов flush_on_error...")
-            logger.flush_on_error(400, "Bad Request")
-            
-            print(f"Проверяем, что все файлы созданы...")
-            assert (debug_dir / "request_body.json").exists()
-            assert (debug_dir / "kiro_request_body.json").exists()
-            assert (debug_dir / "response_stream_raw.txt").exists()
-            assert (debug_dir / "response_stream_modified.txt").exists()
-            assert (debug_dir / "error_info.json").exists()
-            
-            print(f"Проверяем error_info.json...")
-            error_info = json.loads((debug_dir / "error_info.json").read_text())
-            assert error_info["status_code"] == 400
-            assert error_info["error_message"] == "Bad Request"
-    
-    def test_flush_on_error_clears_buffers(self, tmp_path):
-        """
-        Что он делает: Проверяет, что flush_on_error очищает буферы после записи.
-        Цель: Убедиться, что буферы не накапливаются между запросами.
-        """
-        print("Настройка: Режим errors...")
-        debug_dir = tmp_path / "debug_logs"
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'errors'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            logger.debug_dir = debug_dir
-            
-            logger.log_request_body(b'{"test": "data"}')
-            
-            print("Действие: Вызов flush_on_error...")
-            logger.flush_on_error(500, "Error")
-            
-            print(f"Проверяем, что буферы очищены...")
-            assert logger._request_body_buffer is None
-            assert logger._kiro_request_body_buffer is None
-            assert len(logger._raw_chunks_buffer) == 0
-            assert len(logger._modified_chunks_buffer) == 0
-    
-    def test_discard_buffers_clears_without_writing(self, tmp_path):
-        """
-        Что он делает: Проверяет, что discard_buffers очищает буферы без записи.
-        Цель: Убедиться, что успешные запросы не оставляют логов.
-        """
-        print("Настройка: Режим errors, заполняем буферы...")
-        debug_dir = tmp_path / "debug_logs"
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'errors'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            logger.debug_dir = debug_dir
-            
-            logger.log_request_body(b'{"test": "data"}')
-            logger.log_raw_chunk(b'chunk')
-            
-            print("Действие: Вызов discard_buffers...")
-            logger.discard_buffers()
-            
-            print(f"Проверяем, что директория НЕ создана...")
-            assert not debug_dir.exists()
-            
-            print(f"Проверяем, что буферы очищены...")
-            assert logger._request_body_buffer is None
-            assert len(logger._raw_chunks_buffer) == 0
-    
-    def test_flush_on_error_writes_error_info_in_mode_all(self, tmp_path):
-        """
-        Что он делает: Проверяет, что flush_on_error записывает error_info.json в режиме all.
-        Цель: Убедиться, что информация об ошибке сохраняется в обоих режимах.
-        """
-        print("Настройка: Режим all...")
-        debug_dir = tmp_path / "debug_logs"
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'all'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            logger.debug_dir = debug_dir
-            
-            print("Действие: Вызов flush_on_error...")
-            logger.flush_on_error(400, "Bad Request")
-            
-            print(f"Проверяем, что error_info.json создан...")
-            assert (debug_dir / "error_info.json").exists()
-            
-            print(f"Проверяем содержимое error_info.json...")
-            error_info = json.loads((debug_dir / "error_info.json").read_text())
-            assert error_info["status_code"] == 400
-            assert error_info["error_message"] == "Bad Request"
+def file_bytes(debug: DebugLogger) -> bytes:
+    """Snapshot only the test logger's output files."""
+    return b"\n".join(path.read_bytes() for path in debug.debug_dir.glob("*"))
 
 
-class TestDebugLoggerLogErrorInfo:
-    """Тесты для метода log_error_info()."""
-    
-    def test_log_error_info_writes_in_mode_all(self, tmp_path):
-        """
-        Что он делает: Проверяет, что log_error_info записывает файл в режиме all.
-        Цель: Убедиться, что error_info.json создаётся при ошибках.
-        """
-        print("Настройка: Режим all...")
-        debug_dir = tmp_path / "debug_logs"
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'all'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            logger.debug_dir = debug_dir
-            
-            print("Действие: Вызов log_error_info...")
-            logger.log_error_info(500, "Internal Server Error")
-            
-            print(f"Проверяем, что error_info.json создан...")
-            error_file = debug_dir / "error_info.json"
-            assert error_file.exists()
-            
-            print(f"Проверяем содержимое...")
-            error_info = json.loads(error_file.read_text())
-            assert error_info["status_code"] == 500
-            assert error_info["error_message"] == "Internal Server Error"
-    
-    def test_log_error_info_writes_in_mode_errors(self, tmp_path):
-        """
-        Что он делает: Проверяет, что log_error_info записывает файл в режиме errors.
-        Цель: Убедиться, что метод работает в обоих режимах.
-        """
-        print("Настройка: Режим errors...")
-        debug_dir = tmp_path / "debug_logs"
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'errors'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            logger.debug_dir = debug_dir
-            
-            print("Действие: Вызов log_error_info...")
-            logger.log_error_info(404, "Not Found")
-            
-            print(f"Проверяем, что error_info.json создан...")
-            error_file = debug_dir / "error_info.json"
-            assert error_file.exists()
-    
-    def test_log_error_info_does_nothing_in_mode_off(self, tmp_path):
-        """
-        Что он делает: Проверяет, что log_error_info ничего не делает в режиме off.
-        Цель: Убедиться, что в режиме off файлы не создаются.
-        """
-        print("Настройка: Режим off...")
-        debug_dir = tmp_path / "debug_logs"
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'off'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            logger.debug_dir = debug_dir
-            
-            print("Действие: Вызов log_error_info...")
-            logger.log_error_info(500, "Error")
-            
-            print(f"Проверяем, что директория НЕ создана...")
-            assert not debug_dir.exists()
+def assert_empty(debug: DebugLogger) -> None:
+    """Check all request data and the temporary sink have been discarded."""
+    assert debug._request_body_buffer is None
+    assert debug._kiro_request_body_buffer is None
+    assert not debug._raw_chunks_buffer
+    assert not debug._modified_chunks_buffer
+    assert not debug._app_logs_buffer.getvalue()
+    assert debug._loguru_sink_id is None
 
 
-class TestDebugLoggerHelperMethods:
-    """Тесты для вспомогательных методов DebugLogger."""
-    
-    def test_is_enabled_returns_true_for_errors(self):
-        """
-        Что он делает: Проверяет _is_enabled() для режима errors.
-        Цель: Убедиться, что режим errors считается включённым.
-        """
-        print("Настройка: Режим errors...")
-        with patch('kiro.debug_logger.DEBUG_MODE', 'errors'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            
-            print(f"Проверяем _is_enabled()...")
-            assert logger._is_enabled() is True
-    
-    def test_is_enabled_returns_true_for_all(self):
-        """
-        Что он делает: Проверяет _is_enabled() для режима all.
-        Цель: Убедиться, что режим all считается включённым.
-        """
-        print("Настройка: Режим all...")
-        with patch('kiro.debug_logger.DEBUG_MODE', 'all'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            
-            print(f"Проверяем _is_enabled()...")
-            assert logger._is_enabled() is True
-    
-    def test_is_enabled_returns_false_for_off(self):
-        """
-        Что он делает: Проверяет _is_enabled() для режима off.
-        Цель: Убедиться, что режим off считается выключенным.
-        """
-        print("Настройка: Режим off...")
-        with patch('kiro.debug_logger.DEBUG_MODE', 'off'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            
-            print(f"Проверяем _is_enabled()...")
-            assert logger._is_enabled() is False
-    
-    def test_is_immediate_write_returns_true_for_all(self):
-        """
-        Что он делает: Проверяет _is_immediate_write() для режима all.
-        Цель: Убедиться, что режим all пишет сразу.
-        """
-        print("Настройка: Режим all...")
-        with patch('kiro.debug_logger.DEBUG_MODE', 'all'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            
-            print(f"Проверяем _is_immediate_write()...")
-            assert logger._is_immediate_write() is True
-    
-    def test_is_immediate_write_returns_false_for_errors(self):
-        """
-        Что он делает: Проверяет _is_immediate_write() для режима errors.
-        Цель: Убедиться, что режим errors буферизует.
-        """
-        print("Настройка: Режим errors...")
-        with patch('kiro.debug_logger.DEBUG_MODE', 'errors'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            
-            print(f"Проверяем _is_immediate_write()...")
-            assert logger._is_immediate_write() is False
+def assert_summary(summary: dict[str, Any], original: bytes) -> None:
+    """Verify the summary retains diagnostic size/hash but no payload."""
+    assert summary == {
+        "diagnostic": "payload_omitted", "bytes": len(original),
+        "sha256": hashlib.sha256(original).hexdigest(),
+    }
 
 
-class TestDebugLoggerJsonHandling:
-    """Тесты для обработки JSON в DebugLogger."""
-    
-    def test_log_request_body_formats_json_pretty(self, tmp_path):
-        """
-        Что он делает: Проверяет, что JSON форматируется красиво.
-        Цель: Убедиться, что JSON читаем в файле.
-        """
-        print("Настройка: Режим all...")
-        debug_dir = tmp_path / "debug_logs"
-        debug_dir.mkdir()
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'all'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            logger.debug_dir = debug_dir
-            
-            print("Действие: Вызов log_request_body с JSON...")
-            logger.log_request_body(b'{"key":"value"}')
-            
-            print(f"Проверяем форматирование...")
-            content = (debug_dir / "request_body.json").read_text()
-            # Должен быть отформатирован с отступами
-            assert "  " in content or "\n" in content
-    
-    def test_log_request_body_handles_invalid_json(self, tmp_path):
-        """
-        Что он делает: Проверяет обработку невалидного JSON.
-        Цель: Убедиться, что невалидный JSON записывается как есть.
-        """
-        print("Настройка: Режим all...")
-        debug_dir = tmp_path / "debug_logs"
-        debug_dir.mkdir()
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'all'):
-            from kiro.debug_logger import DebugLogger
-            logger = DebugLogger.__new__(DebugLogger)
-            logger._initialized = False
-            logger.__init__()
-            logger.debug_dir = debug_dir
-            
-            print("Действие: Вызов log_request_body с невалидным JSON...")
-            invalid_data = b'not a json {{'
-            logger.log_request_body(invalid_data)
-            
-            print(f"Проверяем, что данные записаны как есть...")
-            content = (debug_dir / "request_body.json").read_bytes()
-            assert content == invalid_data
+def test_singleton_initialization_is_idempotent(debug: DebugLogger, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Existing singleton users keep their logger and buffers on repeated init."""
+    monkeypatch.setattr(DebugLogger, "_instance", None)
+    first = DebugLogger()
+    first.log_request_body(REQUEST)
+    second = DebugLogger()
+    assert first is second
+    assert second._request_body_buffer is not None
+    assert SECRET.encode() not in buffer_bytes(second)
+    second._clear_buffers()
 
 
-class TestDebugLoggerAppLogsCapture:
-    """Тесты для захвата логов приложения (app_logs.txt)."""
-    
-    def test_prepare_new_request_sets_up_log_capture(self, tmp_path):
-        """
-        Что он делает: Проверяет, что prepare_new_request настраивает захват логов.
-        Цель: Убедиться, что sink для логов создаётся.
-        """
-        print("Настройка: Режим all...")
-        debug_dir = tmp_path / "debug_logs"
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'all'):
-            from kiro.debug_logger import DebugLogger
-            dbg_logger = DebugLogger.__new__(DebugLogger)
-            dbg_logger._initialized = False
-            dbg_logger.__init__()
-            dbg_logger.debug_dir = debug_dir
-            
-            print("Действие: Вызов prepare_new_request...")
-            dbg_logger.prepare_new_request()
-            
-            print(f"Проверяем, что sink создан...")
-            assert dbg_logger._loguru_sink_id is not None
-            
-            # Очистка
-            dbg_logger._clear_app_logs_buffer()
-    
-    def test_flush_on_error_writes_app_logs_in_mode_errors(self, tmp_path):
-        """
-        Что он делает: Проверяет, что flush_on_error записывает app_logs.txt в режиме errors.
-        Цель: Убедиться, что логи приложения сохраняются при ошибках.
-        """
-        print("Настройка: Режим errors...")
-        debug_dir = tmp_path / "debug_logs"
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'errors'):
-            from kiro.debug_logger import DebugLogger
-            from loguru import logger as loguru_logger
-            
-            dbg_logger = DebugLogger.__new__(DebugLogger)
-            dbg_logger._initialized = False
-            dbg_logger.__init__()
-            dbg_logger.debug_dir = debug_dir
-            
-            # Настраиваем захват логов
-            dbg_logger.prepare_new_request()
-            
-            # Добавляем данные в буфер чтобы flush сработал
-            dbg_logger.log_request_body(b'{"test": "data"}')
-            
-            # Пишем тестовый лог напрямую в буфер (имитация)
-            dbg_logger._app_logs_buffer.write("Test log message\n")
-            
-            print("Действие: Вызов flush_on_error...")
-            dbg_logger.flush_on_error(500, "Test Error")
-            
-            print(f"Проверяем, что app_logs.txt создан...")
-            app_logs_file = debug_dir / "app_logs.txt"
-            assert app_logs_file.exists()
-            
-            print(f"Проверяем содержимое...")
-            content = app_logs_file.read_text()
-            assert "Test log message" in content
-    
-    def test_discard_buffers_saves_logs_in_mode_all(self, tmp_path):
-        """
-        Что он делает: Проверяет, что discard_buffers сохраняет логи в режиме all.
-        Цель: Убедиться, что даже успешные запросы сохраняют логи в режиме all.
-        """
-        print("Настройка: Режим all...")
-        debug_dir = tmp_path / "debug_logs"
-        debug_dir.mkdir()
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'all'):
-            from kiro.debug_logger import DebugLogger
-            
-            dbg_logger = DebugLogger.__new__(DebugLogger)
-            dbg_logger._initialized = False
-            dbg_logger.__init__()
-            dbg_logger.debug_dir = debug_dir
-            
-            # Настраиваем захват логов
-            dbg_logger.prepare_new_request()
-            
-            # Пишем тестовый лог напрямую в буфер
-            dbg_logger._app_logs_buffer.write("Success log message\n")
-            
-            print("Действие: Вызов discard_buffers...")
-            dbg_logger.discard_buffers()
-            
-            print(f"Проверяем, что app_logs.txt создан...")
-            app_logs_file = debug_dir / "app_logs.txt"
-            assert app_logs_file.exists()
-            
-            print(f"Проверяем содержимое...")
-            content = app_logs_file.read_text()
-            assert "Success log message" in content
-    
-    def test_discard_buffers_does_not_save_logs_in_mode_errors(self, tmp_path):
-        """
-        Что он делает: Проверяет, что discard_buffers НЕ сохраняет логи в режиме errors.
-        Цель: Убедиться, что успешные запросы не оставляют логов в режиме errors.
-        """
-        print("Настройка: Режим errors...")
-        debug_dir = tmp_path / "debug_logs"
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'errors'):
-            from kiro.debug_logger import DebugLogger
-            
-            dbg_logger = DebugLogger.__new__(DebugLogger)
-            dbg_logger._initialized = False
-            dbg_logger.__init__()
-            dbg_logger.debug_dir = debug_dir
-            
-            # Настраиваем захват логов
-            dbg_logger.prepare_new_request()
-            
-            # Пишем тестовый лог напрямую в буфер
-            dbg_logger._app_logs_buffer.write("Should not be saved\n")
-            
-            print("Действие: Вызов discard_buffers...")
-            dbg_logger.discard_buffers()
-            
-            print(f"Проверяем, что директория НЕ создана...")
-            assert not debug_dir.exists()
-    
-    def test_clear_app_logs_buffer_removes_sink(self, tmp_path):
-        """
-        Что он делает: Проверяет, что _clear_app_logs_buffer удаляет sink.
-        Цель: Убедиться, что sink корректно удаляется.
-        """
-        print("Настройка: Режим all...")
-        with patch('kiro.debug_logger.DEBUG_MODE', 'all'):
-            from kiro.debug_logger import DebugLogger
-            
-            dbg_logger = DebugLogger.__new__(DebugLogger)
-            dbg_logger._initialized = False
-            dbg_logger.__init__()
-            dbg_logger.debug_dir = tmp_path / "debug_logs"
-            
-            # Настраиваем захват логов
-            dbg_logger.prepare_new_request()
-            sink_id = dbg_logger._loguru_sink_id
-            assert sink_id is not None
-            
-            print("Действие: Вызов _clear_app_logs_buffer...")
-            dbg_logger._clear_app_logs_buffer()
-            
-            print(f"Проверяем, что sink_id сброшен...")
-            assert dbg_logger._loguru_sink_id is None
-    
-    def test_app_logs_not_saved_when_empty(self, tmp_path):
-        """
-        Что он делает: Проверяет, что пустые логи не создают файл.
-        Цель: Убедиться, что app_logs.txt не создаётся если логов нет.
-        """
-        print("Настройка: Режим all...")
-        debug_dir = tmp_path / "debug_logs"
-        debug_dir.mkdir()
-        
-        with patch('kiro.debug_logger.DEBUG_MODE', 'all'):
-            from kiro.debug_logger import DebugLogger
-            
-            dbg_logger = DebugLogger.__new__(DebugLogger)
-            dbg_logger._initialized = False
-            dbg_logger.__init__()
-            dbg_logger.debug_dir = debug_dir
-            
-            # НЕ пишем ничего в буфер
-            
-            print("Действие: Вызов _write_app_logs_to_file...")
-            dbg_logger._write_app_logs_to_file()
-            
-            print(f"Проверяем, что app_logs.txt НЕ создан...")
-            app_logs_file = debug_dir / "app_logs.txt"
-            assert not app_logs_file.exists()
+@pytest.mark.parametrize("mode,enabled,immediate", [("off", False, False), ("errors", True, False), ("all", True, True), ("unknown", False, False)])
+def test_mode_helpers(debug: DebugLogger, monkeypatch: pytest.MonkeyPatch, mode: str, enabled: bool, immediate: bool) -> None:
+    """Keep the existing default mode contract, including unknown modes."""
+    monkeypatch.setattr(debug_module, "DEBUG_MODE", mode)
+    assert debug._is_enabled() is enabled
+    assert debug._is_immediate_write() is immediate
+
+
+def test_off_mode_retains_and_writes_nothing(debug: DebugLogger, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every public logging API is disabled when mode is off."""
+    monkeypatch.setattr(debug_module, "DEBUG_MODE", "off")
+    debug.prepare_new_request()
+    debug.log_request_body(REQUEST)
+    debug.log_kiro_request_body(REQUEST)
+    debug.log_raw_chunk(SECRET.encode())
+    debug.log_modified_chunk(MODIFIED)
+    debug.log_error_info(500, SECRET)
+    debug.flush_on_error(500, SECRET)
+    debug.discard_buffers()
+    assert not debug.debug_dir.exists()
+    assert_empty(debug)
+
+
+def test_all_mode_replaces_only_owned_files(debug: DebugLogger, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the configured temporary directory is cleared for a new request."""
+    monkeypatch.setattr(debug_module, "DEBUG_MODE", "all")
+    debug.debug_dir.mkdir()
+    old_file = debug.debug_dir / "request_body.json"
+    old_file.write_text("old diagnostic")
+    unrelated = debug.debug_dir / "operator-notes.txt"
+    unrelated.write_text("keep unrelated data")
+    sibling = debug.debug_dir.parent / "untouched.txt"
+    sibling.write_text("keep")
+    debug.prepare_new_request()
+    assert debug.debug_dir.exists()
+    assert not old_file.exists()
+    assert unrelated.read_text() == "keep unrelated data"
+    assert sibling.read_text() == "keep"
+    assert debug._loguru_sink_id is not None
+
+
+@pytest.mark.parametrize("mode", ["all", "errors"])
+def test_buffers_and_files_never_contain_native_secrets(debug: DebugLogger, monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    """Both modes sanitize client/upstream bodies and streams before retention."""
+    monkeypatch.setattr(debug_module, "DEBUG_MODE", mode)
+    debug.prepare_new_request()
+    debug.log_request_body(REQUEST)
+    debug.log_kiro_request_body(REQUEST)
+    debug.log_raw_chunk(b"\x00\xff" + SECRET.encode())
+    debug.log_modified_chunk(MODIFIED)
+    app_logger.warning("Unstructured upstream dump: {}", SECRET)
+    assert SECRET.encode() not in buffer_bytes(debug)
+    if mode == "errors":
+        assert not debug.debug_dir.exists()
+        assert json.loads(debug._request_body_buffer)["messages"][0]["content"][0]["signature"] == REDACTED
+    else:
+        assert (debug.debug_dir / "request_body.json").exists()
+        assert SECRET.encode() not in file_bytes(debug)
+    debug.flush_on_error(502, "Bearer " + SECRET)
+    assert {path.name for path in debug.debug_dir.iterdir()} == {
+        "request_body.json", "kiro_request_body.json", "response_stream_raw.txt",
+        "response_stream_modified.txt", "error_info.json", "app_logs.txt",
+    }
+    assert SECRET.encode() not in file_bytes(debug)
+    request = json.loads((debug.debug_dir / "request_body.json").read_bytes())
+    assert request["model"] == "test-model"
+    assert request["messages"][0]["content"][0]["thinking"] == "Useful diagnostic text"
+    assert request["messages"][0]["content"][0]["signature"] == REDACTED
+    assert b"signature_delta" in (debug.debug_dir / "response_stream_modified.txt").read_bytes()
+    error = json.loads((debug.debug_dir / "error_info.json").read_bytes())
+    assert error["status_code"] == 502
+    assert_summary(error["error_message"], ("Bearer " + SECRET).encode())
+    assert_empty(debug)
+
+
+@pytest.mark.parametrize("mode", ["all", "errors"])
+@pytest.mark.parametrize("method,filename,buffer_name", [
+    ("log_request_body", "request_body.json", "_request_body_buffer"),
+    ("log_kiro_request_body", "kiro_request_body.json", "_kiro_request_body_buffer"),
+])
+@pytest.mark.parametrize("payload", [b'{"signature":"' + SECRET.encode(), b"\xff" + SECRET.encode(), b"refresh_token=" + SECRET.encode()])
+def test_malformed_request_bodies_are_summaries(debug: DebugLogger, monkeypatch: pytest.MonkeyPatch, mode: str, method: str, filename: str, buffer_name: str, payload: bytes) -> None:
+    """Invalid UTF-8 and partial JSON must not fall back to original bytes."""
+    monkeypatch.setattr(debug_module, "DEBUG_MODE", mode)
+    getattr(debug, method)(payload)
+    saved = (debug.debug_dir / filename).read_bytes() if mode == "all" else getattr(debug, buffer_name)
+    assert_summary(json.loads(saved), payload)
+    assert SECRET.encode() not in saved
+
+
+@pytest.mark.parametrize("mode", ["all", "errors"])
+def test_raw_chunks_are_individual_summaries(debug: DebugLogger, monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    """Appending raw chunks cannot reconstruct a signature split across calls."""
+    monkeypatch.setattr(debug_module, "DEBUG_MODE", mode)
+    chunks = [b'{"sig', b'nature":"' + SECRET[:12].encode(), SECRET[12:].encode() + b'"}', b"\x00\xff", b""]
+    for chunk in chunks:
+        debug.log_raw_chunk(chunk)
+    output = (debug.debug_dir / "response_stream_raw.txt").read_bytes() if mode == "all" else bytes(debug._raw_chunks_buffer)
+    records = [json.loads(line) for line in output.splitlines()]
+    assert len(records) == len(chunks)
+    for record, chunk in zip(records, chunks):
+        assert_summary(record, chunk)
+    assert SECRET[:12].encode() not in output
+    assert SECRET[12:].encode() not in output
+
+
+@pytest.mark.parametrize("mode", ["all", "errors"])
+def test_modified_fragments_fail_closed_independently(debug: DebugLogger, monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    """A split secret and a malformed suffix never enter retained stream data."""
+    monkeypatch.setattr(debug_module, "DEBUG_MODE", mode)
+    chunks = [b'data: {"signature":"' + SECRET[:12].encode(), SECRET[12:].encode() + b'"}\n\n', b'data: {"text":"Visible"}\n\n' + SECRET.encode()]
+    for chunk in chunks:
+        debug.log_modified_chunk(chunk)
+    output = (debug.debug_dir / "response_stream_modified.txt").read_bytes() if mode == "all" else bytes(debug._modified_chunks_buffer)
+    records = [json.loads(line) for line in output.splitlines()]
+    for record, chunk in zip(records, chunks):
+        assert_summary(record, chunk)
+    assert len(records) == len(chunks)
+    assert SECRET[:12].encode() not in output
+    assert SECRET[12:].encode() not in output
+    assert b"Visible" not in output
+
+
+def test_pretty_json_remains_available(debug: DebugLogger, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Readable complete JSON keeps formatting and safe metadata."""
+    monkeypatch.setattr(debug_module, "DEBUG_MODE", "all")
+    debug.log_request_body(b'{"model":"test","messages":[]}')
+    content = (debug.debug_dir / "request_body.json").read_text()
+    assert '\n  "model": "test"' in content
+    assert json.loads(content) == {"model": "test", "messages": []}
+
+
+def test_errors_success_discards_every_buffer_without_files(debug: DebugLogger) -> None:
+    """Successful errors-mode requests do not create output directories."""
+    debug.prepare_new_request()
+    debug.log_request_body(REQUEST)
+    debug.log_kiro_request_body(REQUEST)
+    debug.log_raw_chunk(SECRET.encode())
+    debug.log_modified_chunk(MODIFIED)
+    app_logger.info("Request success {}", SECRET)
+    debug.discard_buffers()
+    assert not debug.debug_dir.exists()
+    assert_empty(debug)
+
+
+def test_all_success_saves_safe_app_logs_and_cleans_sink(debug: DebugLogger, monkeypatch: pytest.MonkeyPatch) -> None:
+    """All mode persists application diagnostics on success without message text."""
+    monkeypatch.setattr(debug_module, "DEBUG_MODE", "all")
+    debug.prepare_new_request()
+    app_logger.info("Success message {}", SECRET)
+    before = debug._app_logs_buffer.getvalue()
+    records = [json.loads(line) for line in before.splitlines()]
+    assert records[-1]["level"] == 20
+    assert "sha256" in records[-1]["message"]
+    assert "time" in records[-1] and "line" in records[-1]
+    assert SECRET not in before
+    assert "Success message" not in before
+    debug.discard_buffers()
+    assert (debug.debug_dir / "app_logs.txt").read_text() == before
+    assert_empty(debug)
+
+
+def test_exception_tracebacks_are_never_captured_raw(debug: DebugLogger) -> None:
+    """Tracebacks and exception locals must not bypass the summary-only sink."""
+    debug.prepare_new_request()
+    try:
+        raise ValueError(SECRET)
+    except ValueError:
+        app_logger.exception("Failed while decoding {}", SECRET)
+    assert SECRET.encode() not in buffer_bytes(debug)
+    debug.flush_on_error(500, SECRET)
+    assert SECRET.encode() not in file_bytes(debug)
+    assert (debug.debug_dir / "app_logs.txt").exists()
+    assert_empty(debug)
+
+
+@pytest.mark.parametrize("mode", ["all", "errors"])
+def test_bodyless_error_still_writes_status_and_cleans_up(debug: DebugLogger, monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    """Early failures retain status/app summaries even when no body was captured."""
+    monkeypatch.setattr(debug_module, "DEBUG_MODE", mode)
+    debug.prepare_new_request()
+    app_logger.error("Early failure {}", SECRET)
+    debug.flush_on_error(401, SECRET)
+    info = json.loads((debug.debug_dir / "error_info.json").read_bytes())
+    assert info["status_code"] == 401
+    assert_summary(info["error_message"], SECRET.encode())
+    assert SECRET.encode() not in file_bytes(debug)
+    assert_empty(debug)
+
+
+@pytest.mark.parametrize("mode", ["all", "errors"])
+def test_direct_error_info_has_no_raw_error_text(debug: DebugLogger, monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    """Direct error-info calls also apply the privacy boundary."""
+    monkeypatch.setattr(debug_module, "DEBUG_MODE", mode)
+    debug.log_error_info(400, SECRET + "\ud800")
+    info = json.loads((debug.debug_dir / "error_info.json").read_bytes())
+    assert info["status_code"] == 400
+    assert_summary(info["error_message"], (SECRET + "\ud800").encode("utf-8", errors="surrogatepass"))
+    assert SECRET.encode() not in file_bytes(debug)
+
+
+def test_capture_reset_removes_previous_sink(debug: DebugLogger) -> None:
+    """Repeated preparation keeps one sink and discards previous request state."""
+    debug.prepare_new_request()
+    previous = debug._loguru_sink_id
+    debug.log_request_body(REQUEST)
+    app_logger.info("Previous request")
+    debug.prepare_new_request()
+    assert debug._loguru_sink_id != previous
+    assert debug._request_body_buffer is None
+    assert not debug._app_logs_buffer.getvalue()
+    with pytest.raises(ValueError):
+        app_logger.remove(previous)
+
+
+def test_cleanup_tolerates_already_removed_sink(debug: DebugLogger) -> None:
+    """External sink cleanup must not prevent buffer disposal."""
+    debug.prepare_new_request()
+    app_logger.remove(debug._loguru_sink_id)
+    debug._clear_app_logs_buffer()
+    assert_empty(debug)
+
+
+def test_switching_off_removes_existing_capture(debug: DebugLogger, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disabling diagnostics cannot leave a previously installed sink active."""
+    debug.prepare_new_request()
+    debug.log_request_body(REQUEST)
+    monkeypatch.setattr(debug_module, "DEBUG_MODE", "off")
+    debug.prepare_new_request()
+    app_logger.info("Not captured {}", SECRET)
+    assert_empty(debug)
+
+
+def test_empty_app_logs_do_not_create_files(debug: DebugLogger) -> None:
+    """Do not create empty application log files or their parent directory."""
+    debug._write_app_logs_to_file()
+    assert not debug.debug_dir.exists()
+
+
+@pytest.mark.parametrize("helper,filename,payload", [
+    ("_write_request_body_to_file", "request_body.json", REQUEST),
+    ("_write_kiro_request_body_to_file", "kiro_request_body.json", REQUEST),
+    ("_append_raw_chunk_to_file", "response_stream_raw.txt", SECRET.encode()),
+    ("_append_modified_chunk_to_file", "response_stream_modified.txt", MODIFIED),
+])
+def test_private_payload_helpers_cannot_bypass_redaction(debug: DebugLogger, helper: str, filename: str, payload: bytes) -> None:
+    """File-writing entry points retain safety even when called directly."""
+    getattr(debug, helper)(payload)
+    assert (debug.debug_dir / filename).exists()
+    assert SECRET.encode() not in file_bytes(debug)
+
+
+def test_failed_flush_cleans_buffers_and_never_logs_exception_text(debug: DebugLogger) -> None:
+    """Filesystem errors cannot retain buffers or leak sensitive exception paths."""
+    debug.prepare_new_request()
+    debug.log_request_body(REQUEST)
+    with patch.object(Path, "mkdir", side_effect=PermissionError(SECRET)), patch.object(debug_module.logger, "error") as error_log:
+        debug.flush_on_error(500, SECRET)
+    assert SECRET not in str(error_log.call_args_list)
+    assert error_log.called
+    assert_empty(debug)
+
+
+def test_failed_file_write_is_nonfatal_and_sanitized(debug: DebugLogger, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Immediate-write failures produce fixed actionable messages only."""
+    monkeypatch.setattr(debug_module, "DEBUG_MODE", "all")
+    with patch.object(Path, "open", side_effect=OSError(SECRET)), patch.object(debug_module.logger, "error") as error_log:
+        debug.log_request_body(REQUEST)
+        debug.log_raw_chunk(SECRET.encode())
+        debug.log_modified_chunk(MODIFIED)
+        debug.log_error_info(500, SECRET)
+    assert error_log.call_count == 4
+    assert SECRET not in str(error_log.call_args_list)
+
+
+def test_prepare_directory_failure_is_nonfatal(debug: DebugLogger, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed reset reports only a safe message and remains cleanable."""
+    monkeypatch.setattr(debug_module, "DEBUG_MODE", "all")
+    with patch.object(Path, "mkdir", side_effect=PermissionError(SECRET)):
+        debug.prepare_new_request()
+    assert SECRET.encode() not in buffer_bytes(debug)
+    debug.discard_buffers()
+    assert_empty(debug)
+
+@pytest.mark.parametrize("mode", ["all", "errors"])
+@pytest.mark.parametrize("messages", [
+    ('metadataEvent: {"encrypted_content":"' + SECRET + '","unknown":true}',),
+    ('metadataEvent: {"encrypted_content":"' + SECRET,),
+    ("metadataEvent: {'signature': '" + SECRET + "', 'redactedContent': '" + SECRET + "'}",),
+    ('metadataEvent: {\\"encrypted_content\\":\\"' + SECRET + '\\"}',),
+    ('metadataEvent: {"nested":{"refreshToken":"' + SECRET + '"}}',),
+    ('metadataEvent: {"Authorization":"Bearer ' + SECRET,),
+    ('metadataEvent: {"encrypted_', 'content":"' + SECRET[:12], SECRET[12:] + '"}'),
+    (SECRET[:12], SECRET[12:]),
+])
+def test_metadata_application_messages_are_safe_before_and_after_persistence(
+    debug: DebugLogger,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    messages: tuple[str, ...],
+) -> None:
+    """Unknown, truncated, and split native metadata never enters StringIO raw."""
+    monkeypatch.setattr(debug_module, "DEBUG_MODE", mode)
+    debug.prepare_new_request()
+    for message in messages:
+        app_logger.debug("{}", message)
+        # Inspect retained memory immediately, not just after flush or cleanup.
+        captured = debug._app_logs_buffer.getvalue()
+        assert SECRET not in captured
+        assert SECRET[:12] not in captured
+        assert SECRET[12:] not in captured
+        assert "metadataEvent" not in captured
+        assert "encrypted_content" not in captured
+        assert "refreshToken" not in captured
+    entries = [json.loads(line) for line in captured.splitlines()]
+    assert len(entries) == len(messages)
+    for entry in entries:
+        assert entry["level"] == 10
+        assert entry["message"]["diagnostic"] == "payload_omitted"
+        assert entry["message"]["bytes"] > 0
+        assert len(entry["message"]["sha256"]) == 64
+    if mode == "errors":
+        assert not debug.debug_dir.exists()
+        debug.flush_on_error(502, "Metadata decoding failed")
+    else:
+        debug.discard_buffers()
+    saved = (debug.debug_dir / "app_logs.txt").read_text()
+    assert saved == captured
+    assert SECRET[:12] not in saved
+    assert SECRET[12:] not in saved
+    assert_empty(debug)
