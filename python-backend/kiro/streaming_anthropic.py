@@ -31,6 +31,7 @@ This module formats Kiro events into Anthropic SSE format:
 Reference: https://docs.anthropic.com/en/api/messages-streaming
 """
 
+import asyncio
 import json
 import time
 import uuid
@@ -698,7 +699,7 @@ async def stream_kiro_to_anthropic(
         usage_payload.update(upstream_cache_usage)
         usage_payload.update(authoritative_usage(upstream_usage, "anthropic"))
 
-        native_projection.finish()
+        await asyncio.to_thread(native_projection.finish)
         yield emit("message_delta", {
             "type": "message_delta",
             **({"kiro_upstream_model": resolved_model_id} if resolved_model_id else {}),

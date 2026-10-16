@@ -25,6 +25,7 @@ Contains the /v1/messages endpoint compatible with Anthropic's Messages API.
 Reference: https://docs.anthropic.com/en/api/messages
 """
 
+import asyncio
 import json
 from typing import Optional
 
@@ -291,7 +292,7 @@ async def messages(
             if tool_type and tool_type.startswith("web_search"):
                 # Path A: Early return, direct MCP call
                 # Get auth_manager from first available account (no failover needed for early return)
-                account = request.app.state.account_manager.get_first_account()
+                account = await asyncio.to_thread(request.app.state.account_manager.get_first_account)
                 if not account.auth_manager:
                     logger.error("No initialized accounts available for native web_search")
                     return JSONResponse(
@@ -380,7 +381,7 @@ async def messages(
             profile_arn_for_payload = auth_manager.profile_arn or PROFILE_ARN or ""
             
             try:
-                kiro_payload = anthropic_to_kiro(
+                kiro_payload = await asyncio.to_thread(anthropic_to_kiro,
                     request_data,
                     conversation_id,
                     profile_arn_for_payload
@@ -659,7 +660,7 @@ async def messages(
         # ==============================================================================
         # LEGACY MODE: Single Account (no failover)
         # ==============================================================================
-        account = request.app.state.account_manager.get_first_account()
+        account = await asyncio.to_thread(request.app.state.account_manager.get_first_account)
         if not account.auth_manager:
             logger.error("No initialized accounts available (legacy mode)")
             return JSONResponse(
@@ -688,7 +689,7 @@ async def messages(
     profile_arn_for_payload = auth_manager.profile_arn or PROFILE_ARN or ""
     
     try:
-        kiro_payload = anthropic_to_kiro(
+        kiro_payload = await asyncio.to_thread(anthropic_to_kiro,
             request_data,
             conversation_id,
             profile_arn_for_payload

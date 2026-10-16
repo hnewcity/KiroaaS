@@ -1,5 +1,6 @@
 """Bind selected account capabilities to the request before converter hooks run."""
 
+import asyncio
 import hashlib
 from typing import Any, Dict
 
@@ -23,7 +24,11 @@ def bind_account(account: Any) -> None:
     state.auth_manager = getattr(account, "auth_manager", None)
     state.auth_generation = credential_generation(state.auth_manager)
     if isinstance(identity, str):
-        binding = identity + ("\0" + state.auth_generation if state.auth_generation else "")
+        replay_binding = getattr(state.auth_manager, "replay_binding", None)
+        generation = replay_binding(identity) if callable(replay_binding) else None
+        if not isinstance(generation, str):
+            generation = state.auth_generation
+        binding = identity + ("\0" + generation if generation else "")
         state.account_scope = hashlib.sha256(binding.encode("utf-8")).hexdigest()
     state.model_cache = getattr(account, "model_cache", None)
 
@@ -40,7 +45,7 @@ def install_upstream_account_context() -> None:
 
     async def get_next(self: Any, *args: Any, **kwargs: Any) -> Any:
         account = await next_account(self, *args, **kwargs)
-        bind_account(account)
+        await asyncio.to_thread(bind_account, account)
         return account
 
     def get_first(self: Any, *args: Any, **kwargs: Any) -> Any:

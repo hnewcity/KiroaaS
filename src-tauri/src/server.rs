@@ -1,6 +1,4 @@
-use crate::config::AppConfig;
-#[cfg(not(debug_assertions))]
-use crate::config::get_app_data_dir;
+use crate::config::{get_app_data_dir, AppConfig};
 use serde::{Deserialize, Serialize};
 use std::process::{Child, Command, Stdio};
 use std::io::{BufRead, BufReader};
@@ -102,6 +100,10 @@ impl ServerManager {
             cmd.env("DEBUG_DIR", data_dir.join("debug_logs"));
         }
 
+        // Keep durable replay in the same app directory in debug and release builds.
+        if std::env::var_os("KIRO_NATIVE_REPLAY_DIR").is_none() {
+            cmd.env("KIRO_NATIVE_REPLAY_DIR", get_app_data_dir()?.join("native-replay"));
+        }
         cmd.env("TAURI_MANAGED", "true")
             .env("KIROAAS_APP_VERSION", env!("CARGO_PKG_VERSION"))
             .env("PROXY_API_KEY", &config.proxy_api_key)

@@ -135,10 +135,14 @@ def assemble_openai(events):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("api", ["anthropic", "openai"])
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_native_output_and_verified_tool_continuation_round_trip(api, streaming):
+@pytest.mark.parametrize("restart", [False, True])
+async def test_native_output_and_verified_tool_continuation_round_trip(api, streaming, restart, tmp_path, monkeypatch):
     import kiro.streaming_anthropic as anthropic
     import kiro.streaming_openai as openai
 
+    if restart:
+        from kiro.native_replay_storage import ReplayStorage
+        monkeypatch.setattr(reasoning_store, "storage", ReplayStorage(tmp_path))
     first_messages = [{"role": "user", "content": "go"}]
     with context() as state:
         first_payload = build(api, request(api, first_messages))
@@ -167,6 +171,11 @@ async def test_native_output_and_verified_tool_continuation_round_trip(api, stre
             assert message["reasoning_content"] == "思考😀A思考B"
             assert any(block.get("data") == "b3BhcXVl" for block in message["reasoning_details"])
             tool_result = {"role": "tool", "tool_call_id": "call-1", "content": "done"}
+    if restart:
+        from extensions.session_identity import session_registry
+        reasoning_store.clear()
+        session_registry.clear()
+        monkeypatch.setattr(reasoning_store, "storage", ReplayStorage(tmp_path))
     # A new ASGI request without an explicit session can recover it only from
     # exact, verified native output. Identical prompt text alone never does this.
     with context() as state:
@@ -421,4 +430,42 @@ async def test_conflicting_model_hints_do_not_create_a_misbound_native_record():
     with context():
         with pytest.raises(KiroStreamError, match="conflicting model IDs"):
             _ = [event async for event in core.parse_kiro_stream(httpx.Response(200, stream=Chunks(data)))]
+        assert not reasoning_store._records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api", ["anthropic", "openai"])
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_storage_failure_does_not_mark_native_output_successful(api, streaming, tmp_path, monkeypatch):
+    """A complete-looking stream is not resumable if committing its proof failed."""
+    from kiro.native_replay_storage import ReplayStorage
+    import kiro.streaming_anthropic as anthropic
+    import kiro.streaming_openai as openai
+
+    storage = ReplayStorage(tmp_path)
+    storage.max_bytes = 1  # Fail the record write, after valid key/schema creation.
+    monkeypatch.setattr(reasoning_store, "storage", storage)
+    with context() as state:
+        build(api, request(api, [{"role": "user", "content": "go"}]))
+        upstream, stream = response()
+        if streaming:
+            producer = (anthropic.stream_kiro_to_anthropic(upstream, MODEL, state.model_cache, SimpleNamespace())
+                        if api == "anthropic" else
+                        openai.stream_kiro_to_openai(None, upstream, MODEL, state.model_cache, SimpleNamespace()))
+            from extensions.kiro_stream_decoder import KiroStreamError
+            chunks = []
+            with pytest.raises(KiroStreamError, match="full"):
+                async for chunk in producer:
+                    chunks.append(chunk)
+            output = "".join(chunks)
+            assert '"type": "message_stop"' not in output and "data: [DONE]" not in output
+        else:
+            from extensions.kiro_stream_decoder import KiroStreamError
+            with pytest.raises(KiroStreamError, match="full"):
+                if api == "anthropic":
+                    await anthropic.collect_anthropic_response(upstream, MODEL, state.model_cache, SimpleNamespace())
+                else:
+                    await openai.collect_stream_response(None, upstream, MODEL, state.model_cache, SimpleNamespace())
+        assert state.stream_error is not None
+        assert stream.closed
         assert not reasoning_store._records

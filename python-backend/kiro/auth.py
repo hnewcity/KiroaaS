@@ -50,6 +50,7 @@ from kiro.config import (
 )
 from kiro.utils import get_machine_fingerprint
 from kiro.credential_identity import CredentialIdentity
+from kiro.native_replay_storage import ReplayStorageError
 from kiro.client_identity import user_agent
 
 
@@ -161,6 +162,12 @@ class KiroAuthManager:
                        If not specified, uses auto-detection or falls back to region
         """
         self._credential_identity = CredentialIdentity()
+        # File loaders can retain constructor fallbacks. Persisted continuity must
+        # include those inputs too, not just the subset present in a JSON/SQLite file.
+        self._credential_identity.observe("configuration", {
+            "refreshToken": refresh_token, "clientId": client_id, "clientSecret": client_secret,
+            "region": region, "apiRegion": api_region, "profileArn": profile_arn,
+        })
         self._initializing_credentials = True
         self._refresh_token = refresh_token
         self._profile_arn = profile_arn
@@ -610,6 +617,8 @@ class KiroAuthManager:
             )
             logger.debug(f"Credentials saved to {self._creds_file}")
             
+        except ReplayStorageError:
+            raise
         except Exception as e:
             logger.error(f"Error saving credentials: {e}")
     
@@ -636,6 +645,7 @@ class KiroAuthManager:
             logger.debug("SQLite write-back disabled (SQLITE_READONLY=true)")
             return
         
+        conn: sqlite3.Connection | None = None
         try:
             path = Path(self._sqlite_db).expanduser()
             if not path.exists():
@@ -670,8 +680,13 @@ class KiroAuthManager:
             
         except sqlite3.Error as e:
             logger.error(f"SQLite error saving credentials: {e}")
+        except ReplayStorageError:
+            raise
         except Exception as e:
             logger.error(f"Error saving credentials to SQLite: {e}")
+        finally:
+            if conn is not None:
+                conn.close()
     
     def _try_save_to_key(self, cursor: sqlite3.Cursor, key: str) -> bool:
         """
@@ -726,6 +741,8 @@ class KiroAuthManager:
                 )
             return saved
             
+        except ReplayStorageError:
+            raise
         except Exception as e:
             logger.debug(f"Failed to save to key {key}: {e}")
             return False
@@ -836,9 +853,9 @@ class KiroAuthManager:
         
         # Save to file or SQLite depending on configuration
         if self._sqlite_db:
-            self._save_credentials_to_sqlite()
+            await asyncio.to_thread(self._save_credentials_to_sqlite)
         else:
-            self._save_credentials_to_file()
+            await asyncio.to_thread(self._save_credentials_to_file)
     
     async def _refresh_token_aws_sso_oidc(self) -> None:
         """
@@ -959,9 +976,9 @@ class KiroAuthManager:
         
         # Save to file or SQLite depending on configuration
         if self._sqlite_db:
-            self._save_credentials_to_sqlite()
+            await asyncio.to_thread(self._save_credentials_to_sqlite)
         else:
-            self._save_credentials_to_file()
+            await asyncio.to_thread(self._save_credentials_to_file)
     
     async def get_access_token(self) -> str:
         """
@@ -1042,6 +1059,16 @@ class KiroAuthManager:
             await self._refresh_token_request()
             return self._access_token
     
+    def replay_binding(self, account_id: str) -> str:
+        """Recover native replay scope from authenticated credential continuity.
+
+        The ordinary credential_generation remains process-local and continues to
+        protect requests against credential replacement during token acquisition.
+        """
+        if not self._refresh_token and not self._access_token:
+            return self.credential_generation
+        return self._credential_identity.replay_binding(account_id)
+
     @property
     def credential_generation(self) -> str:
         """Return a non-secret, per-manager credential binding snapshot.

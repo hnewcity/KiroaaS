@@ -332,6 +332,9 @@ async def lifespan(app: FastAPI):
     concurrent requests efficiently (fixes issue #24).
     """
     logger.info("Starting application... Creating state managers.")
+    from kiro.native_reasoning import initialize_native_replay, shutdown_native_replay
+    await asyncio.to_thread(initialize_native_replay, ACCOUNTS_STATE_FILE)
+    logger.info("Native replay initialized (no automatic history expiry)")
     
     # Create shared HTTP client with connection pooling
     # This reduces memory usage and enables connection reuse across requests
@@ -513,6 +516,7 @@ async def lifespan(app: FastAPI):
     
     # Graceful shutdown
     logger.info("Shutting down application...")
+    shutdown_native_replay()
     
     # Cancel background task
     save_task.cancel()

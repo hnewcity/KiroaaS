@@ -33,6 +33,7 @@ an "exception" event, so no upstream code has to understand the new type.
 import codecs
 import httpx
 import dataclasses
+import asyncio
 import json
 import struct
 import zlib
@@ -43,6 +44,7 @@ from loguru import logger
 from kiro.parsers import AwsEventStreamParser, find_matching_brace
 from extensions.request_context import ensure_request_state
 from kiro.native_reasoning import NativeMessageLedger, NativeReasoningError, normalize_delta, reasoning_store
+from kiro.native_replay_storage import ReplayStorageError
 
 
 
@@ -907,11 +909,11 @@ def install_kiro_stream_decoder() -> None:
                     event.native_index = index
                 yield event
             if state.wire_identity is not None and state.account_scope and state.upstream_model_id:
-                reasoning_store.record(
+                await asyncio.to_thread(reasoning_store.record,
                     (state.client_scope, state.account_scope, state.response_model_id or state.upstream_model_id),
                     state.wire_identity, state.input_turn_anchor, ledger,
                 )
-        except (NativeReasoningError, EventStreamDecodeError) as error:
+        except (NativeReasoningError, ReplayStorageError, EventStreamDecodeError) as error:
             surfaced = KiroStreamError("InvalidNativeStreamException", str(error))
             state.stream_error = surfaced
             raise surfaced from error

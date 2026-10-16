@@ -58,3 +58,64 @@ def test_removed_and_null_credentials_are_distinct_observations() -> None:
     assert identity.observe("json", {})
     assert not identity.observe("json", {})
     assert identity.observe("json", {"refreshToken": None})
+
+
+def test_durable_binding_survives_restart_and_own_refresh(tmp_path, monkeypatch) -> None:
+    """Replay identity survives; per-request generation still changes on restart."""
+    import kiro.native_replay_storage as persistence
+    storage = persistence.ReplayStorage(tmp_path)
+    monkeypatch.setattr(persistence, "_storage", storage)
+    first = CredentialIdentity()
+    first.observe("json", {"refreshToken": "fake-old"})
+    replay = first.replay_binding("account-A")
+    first.record_write("json", {"refreshToken": "fake-new"})
+    monkeypatch.setattr(persistence, "_storage", persistence.ReplayStorage(tmp_path))
+    second = CredentialIdentity()
+    second.observe("json", {"refreshToken": "fake-new"})
+    assert first.binding_key != second.binding_key
+    assert second.replay_binding("account-A") == replay
+    # A live worker still remembers the old read + its new authorized write.
+    # A restarted peer reading the new token must not revoke either worker.
+    assert first.replay_binding("account-A") == replay
+    assert second.replay_binding("account-A") == replay
+    assert second.replay_binding("account-B") != replay
+    assert b"fake-old" not in storage.path.read_bytes()
+    assert b"fake-new" not in storage.path.read_bytes()
+
+
+def test_durable_external_replacement_and_aba_never_revive_scope(tmp_path, monkeypatch) -> None:
+    """A changed source invalidates old state even if the path stays the same."""
+    import kiro.native_replay_storage as persistence
+    monkeypatch.setattr(persistence, "_storage", persistence.ReplayStorage(tmp_path))
+    identity = CredentialIdentity()
+    identity.observe("json", {"token": "A"})
+    first = identity.replay_binding("same-path")
+    identity.observe("json", {"token": "B"})
+    second = identity.replay_binding("same-path")
+    identity.observe("json", {"token": "A"})
+    third = identity.replay_binding("same-path")
+    assert len({first, second, third}) == 3
+
+
+def test_other_process_revocation_cannot_be_undone_by_stale_manager(tmp_path, monkeypatch) -> None:
+    """An old manager must reload credentials, not overwrite a newer binding."""
+    import pytest
+    import kiro.native_replay_storage as persistence
+    monkeypatch.setattr(persistence, "_storage", persistence.ReplayStorage(tmp_path))
+    first = CredentialIdentity()
+    first.observe("json", {"token": "A"})
+    first.replay_binding("account")
+    second = CredentialIdentity()
+    second.observe("json", {"token": "B"})
+    current = second.replay_binding("account")
+    with pytest.raises(persistence.ReplayStorageError, match="another process"):
+        first.replay_binding("account")
+    assert second.replay_binding("account") == current
+
+
+def test_empty_credentials_cannot_recover_a_persistent_account(tmp_path, monkeypatch) -> None:
+    """Absence of credentials is not a shared principal identity."""
+    import kiro.native_replay_storage as persistence
+    monkeypatch.setattr(persistence, "_storage", persistence.ReplayStorage(tmp_path))
+    first, second = CredentialIdentity(), CredentialIdentity()
+    assert first.replay_binding("account") != second.replay_binding("account")

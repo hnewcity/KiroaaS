@@ -1,10 +1,10 @@
 """Native reasoning preservation and bounded, account/model-bound replay state.
 
 Signatures and encrypted blocks are opaque, not gateway-generated signatures.
-The replay cache only records responses actually decoded by this gateway. It keeps
-ordered assistant blocks in memory (never on disk) to restore interleaved Responses
-content for clients with a flattened message format. Missing/expired provenance is
-an explicit client error, never permission to replay another account's state.
+Only responses actually decoded by this gateway become replay evidence. Ordered
+assistant blocks and complete projections are stored in an encrypted durable ledger;
+RAM is a bounded accelerator, not the source of authority. Default evidence has no
+time expiry. Missing provenance never permits another account's state to be used.
 """
 
 from __future__ import annotations
@@ -13,13 +13,17 @@ import base64
 import binascii
 from collections import OrderedDict
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 import hashlib
 import json
+import os
+from pathlib import Path
 import threading
 import time
-from typing import Any
 import uuid
+from typing import Any, Iterator
+
+from kiro.native_replay_storage import ReplayStorage, ReplayStorageError, set_storage
 
 
 class NativeReasoningError(ValueError):
@@ -166,6 +170,7 @@ class ReasoningRecord:
     expires_at: float
     size: int
     projections: dict[bool, "ProjectionReceipt"] = field(default_factory=dict)
+    record_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
 @dataclass(frozen=True)
@@ -178,12 +183,23 @@ class ProjectionReceipt:
 
 
 class ReasoningStore:
-    """Locked TTL/LRU store bounded both by record count and serialized bytes."""
+    """Bounded RAM cache over optional durable, non-expiring replay evidence.
 
-    def __init__(self, max_records: int = 512, max_bytes: int = 16 * 1024 * 1024, ttl: float = 3600) -> None:
-        if max_records < 1 or max_bytes < 1 or ttl <= 0:
+    Args:
+        max_records: RAM record budget; disk evidence is not evicted with RAM.
+        max_bytes: RAM/individual response budget.
+        ttl: Optional legacy memory-only expiry, never a production default.
+        storage: Authenticated persistent ledger, configured at application startup.
+    """
+
+    def __init__(self, max_records: int = 512, max_bytes: int = 16 * 1024 * 1024,
+                 ttl: float | None = None, storage: ReplayStorage | None = None) -> None:
+        if max_records < 1 or max_bytes < 1 or (ttl is not None and ttl <= 0):
             raise ValueError("Reasoning store limits must be positive")
+        if storage is not None and ttl is not None:
+            raise ValueError("Durable native history must not use process-local TTLs")
         self.max_records, self.max_bytes, self.ttl = max_records, max_bytes, ttl
+        self.storage = storage
         self._records: OrderedDict[str, ReasoningRecord] = OrderedDict()
         self._bytes = 0
         self._lock = threading.RLock()
@@ -203,14 +219,12 @@ class ReasoningStore:
             raise NativeReasoningError("Native response exceeds the bounded replay cache; reduce response size")
         record = ReasoningRecord(scope, identity.conversation_id, identity.root_conversation_id,
                                  identity.continuation_id, anchor, deepcopy(ledger.blocks),
-                                 time.monotonic() + self.ttl, len(encoded))
+                                 time.monotonic() + self.ttl if self.ttl is not None else float("inf"), len(encoded))
         with self._lock:
-            self._expire()
-            self._records[str(uuid.uuid4())] = record
-            self._bytes += record.size
-            while len(self._records) > self.max_records or self._bytes > self.max_bytes:
-                _, expired = self._records.popitem(last=False)
-                self._bytes -= expired.size
+            if self.storage is not None:
+                self.storage.put("record", self._record_key(record), self._serialize(record),
+                                 lookup=self._native_key(scope, reasoning_blocks(record.blocks)))
+            self._remember(record)
 
     def find(
         self, scope: tuple[str, str, str], text: str, tools: list[dict[str, Any]] | None,
@@ -225,20 +239,68 @@ class ReasoningStore:
         if not native:
             return None
         with self._lock:
-            self._expire()
-            for key, record in reversed(list(self._records.items())):
+            for record in self._candidates(scope, native):
                 if record.scope != scope or reasoning_blocks(record.blocks) != native:
                     continue
                 stored_text = "".join(block["text"] for block in record.blocks if block["type"] == "text")
                 stored_tools = [block for block in record.blocks if block["type"] == "tool_use"]
                 if stored_text != text or tool_ids(stored_tools) != tool_ids(tools):
                     continue
-                self._records.move_to_end(key)
+                self._remember(record)
                 return deepcopy(record)
         raise NativeReasoningError(
             "Native reasoning cannot be verified for this client/account/model or message content. "
-            "Keep the original account/model and unchanged assistant history; replay state may have expired or the gateway restarted."
+            "[native_history_unavailable] Keep the original account/model and unchanged assistant history. "
+            "If this history predates durable replay or its storage was cleared, its proof cannot be recovered automatically."
         )
+
+    def _record_key(self, record: ReasoningRecord) -> str:
+        """Identify the original response independently of cache location/projections."""
+        return record.record_id
+
+    def _native_key(self, scope: tuple[str, str, str], native: Any) -> str:
+        """Index native candidates only within the selected trusted scope."""
+        assert self.storage is not None
+        return self.storage.fingerprint("native", [scope, native])
+
+    def _remember(self, record: ReasoningRecord) -> None:
+        """Admit to the bounded accelerator; eviction never deletes disk evidence."""
+        self._expire()
+        key = self._record_key(record)
+        previous = self._records.pop(key, None)
+        self._bytes += record.size - (previous.size if previous else 0)
+        self._records[key] = record
+        while len(self._records) > self.max_records or self._bytes > self.max_bytes:
+            _, expired = self._records.popitem(last=False)
+            self._bytes -= expired.size
+
+    @staticmethod
+    def _serialize(record: ReasoningRecord) -> dict[str, Any]:
+        """Persist original data, not monotonic deadlines or decrypted credentials."""
+        value = asdict(record)
+        value.pop("expires_at")
+        value["projections"] = {str(int(api)): asdict(receipt) for api, receipt in record.projections.items()}
+        return value
+
+    @staticmethod
+    def _deserialize(value: dict[str, Any]) -> ReasoningRecord:
+        """Rehydrate authenticated data; malformed state is not a cache miss."""
+        try:
+            value = dict(value)
+            value["scope"] = tuple(value["scope"])
+            value["projections"] = {bool(int(api)): ProjectionReceipt(**receipt)
+                                    for api, receipt in value["projections"].items()}
+            return ReasoningRecord(**value, expires_at=float("inf"))
+        except (KeyError, TypeError, ValueError) as error:
+            raise ReplayStorageError("Native replay record schema is invalid; restore the original database") from error
+
+    def _candidates(self, scope: tuple[str, str, str], native: Any) -> Iterator[ReasoningRecord]:
+        """Search RAM first, then disk, including records evicted in another run."""
+        self._expire()
+        yield from reversed(list(self._records.values()))
+        if self.storage is not None:
+            for value in self.storage.find("record", self._native_key(scope, native)):
+                yield self._deserialize(value)
 
     def record_projection(
         self, scope: tuple[str, str, str], identity: Any, anchor: str,
@@ -255,8 +317,8 @@ class ReasoningStore:
             anthropic: Whether server blocks or flattened OpenAI text were emitted.
             emitted: Complete assistant content observed at the formatter output.
 
-        Missing provenance produces no receipt. Expiry is never refreshed. Receipt
-        bytes count against the same LRU budget as original native state.
+        Missing provenance produces no receipt. Complete receipts are durable;
+        their RAM copies count against the same cache budget as native state.
         """
         if not exchanges or not ledger.has_native:
             return
@@ -281,8 +343,7 @@ class ReasoningStore:
         size = len(_projection_json({"fingerprint": fingerprint, "results": results}).encode("utf-8"))
         receipt = ProjectionReceipt(fingerprint, deepcopy(results), size)
         with self._lock:
-            self._expire()
-            for key, record in reversed(list(self._records.items())):
+            for record in self._candidates(scope, reasoning_blocks(ledger.blocks)):
                 if (record.scope != scope or record.blocks != ledger.blocks
                         or record.turn_anchor != anchor
                         or (record.conversation_id, record.root_conversation_id, record.continuation_id)
@@ -293,12 +354,11 @@ class ReasoningStore:
                 if new_size > self.max_bytes:
                     raise NativeReasoningError("Native projection exceeds the bounded replay cache")
                 projections = {**record.projections, anthropic: receipt}
-                self._records[key] = replace(record, size=new_size, projections=projections)
-                self._bytes += new_size - record.size
-                self._records.move_to_end(key)
-                while len(self._records) > self.max_records or self._bytes > self.max_bytes:
-                    _, expired = self._records.popitem(last=False)
-                    self._bytes -= expired.size
+                updated = replace(record, size=new_size, projections=projections)
+                if self.storage is not None:
+                    key = self.storage.fingerprint("projection", [scope, anthropic, fingerprint])
+                    self.storage.put("projection", key, self._serialize(updated))
+                self._remember(updated)
                 return
 
     def find_projection(
@@ -322,16 +382,53 @@ class ReasoningStore:
                 if record.scope == scope and receipt is not None and receipt.fingerprint == fingerprint:
                     self._records.move_to_end(key)
                     return deepcopy((record, receipt))
+            if self.storage is not None:
+                key = self.storage.fingerprint("projection", [scope, anthropic, fingerprint])
+                value = self.storage.get("projection", key)
+                if value is not None:
+                    record = self._deserialize(value)
+                    receipt = record.projections.get(anthropic)
+                    if record.scope != scope or receipt is None or receipt.fingerprint != fingerprint:
+                        raise ReplayStorageError("Native replay projection identity does not match")
+                    self._remember(record)
+                    return deepcopy((record, receipt))
         return None
 
     def clear(self) -> None:
-        """Drop transient replay state without writing it to disk."""
+        """Clear RAM only; durable evidence is not destroyed on process shutdown."""
         with self._lock:
             self._records.clear()
             self._bytes = 0
 
 
 reasoning_store = ReasoningStore()
+
+
+def initialize_native_replay(state_file: str) -> None:
+    """Configure encrypted replay before account initialization, without import I/O.
+
+    Args:
+        state_file: Existing application state path; the default private replay
+            directory is adjacent to it. Explicit memory mode disables disk I/O.
+    """
+    mode = os.getenv("KIRO_NATIVE_REPLAY_MODE", "persistent").strip().lower()
+    if mode not in ("persistent", "memory"):
+        raise ValueError("KIRO_NATIVE_REPLAY_MODE must be persistent or memory")
+    storage = None
+    if mode == "persistent":
+        directory = Path(os.getenv("KIRO_NATIVE_REPLAY_DIR") or (Path(state_file).absolute().parent / "native-replay"))
+        budget = int(os.getenv("KIRO_NATIVE_REPLAY_MAX_BYTES", str(512 * 1024 * 1024)))
+        storage = ReplayStorage(directory, max_bytes=budget)
+    reasoning_store.clear()
+    reasoning_store.storage = storage
+    set_storage(storage)
+
+
+def shutdown_native_replay() -> None:
+    """Release process-local references without deleting resumable conversations."""
+    reasoning_store.clear()
+    reasoning_store.storage = None
+    set_storage(None)
 
 
 def expand_history(record: ReasoningRecord, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:

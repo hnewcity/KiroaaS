@@ -28,6 +28,7 @@ Contains generators for:
 Uses streaming_core.py for parsing Kiro stream into unified KiroEvent objects.
 """
 
+import asyncio
 import json
 import time
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable, Awaitable, Dict, Optional
@@ -457,7 +458,7 @@ async def stream_kiro_to_openai_internal(
             f"total_tokens={total_tokens} ({total_source})"
         )
         
-        native_projection.finish()
+        await asyncio.to_thread(native_projection.finish)
         yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
         

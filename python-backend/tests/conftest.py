@@ -8,6 +8,7 @@ All tests MUST be completely isolated from the network.
 """
 
 import asyncio
+import os
 import json
 import pytest
 import time
@@ -56,6 +57,9 @@ def setup_test_environment(tmp_path_factory):
     - Patches config paths to use temporary files
     """
     print("🔧 Setting up isolated test environment...")
+    # Lifespan tests must never open or erase the real replay database.
+    original_replay_mode = os.environ.get("KIRO_NATIVE_REPLAY_MODE")
+    os.environ["KIRO_NATIVE_REPLAY_MODE"] = "memory"
     
     # Create temporary directory for test files
     tmp_dir = tmp_path_factory.mktemp("test_config")
@@ -95,6 +99,11 @@ def setup_test_environment(tmp_path_factory):
     
     yield
     
+    if original_replay_mode is None:
+        os.environ.pop("KIRO_NATIVE_REPLAY_MODE", None)
+    else:
+        os.environ["KIRO_NATIVE_REPLAY_MODE"] = original_replay_mode
+
     # Restore original paths
     kiro.config.ACCOUNTS_CONFIG_FILE = original_creds_file
     kiro.config.ACCOUNTS_STATE_FILE = original_state_file

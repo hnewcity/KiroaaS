@@ -5,6 +5,7 @@ Lives outside the upstream kiro/ tree so upstream can be sync'd without conflict
 Mounted by app_entry.py.
 """
 
+import asyncio
 import json
 from datetime import datetime
 
@@ -38,7 +39,7 @@ async def get_usage(request: Request):
     """
     logger.info("Request to /usage")
 
-    auth_manager = _resolve_auth_manager(request)
+    auth_manager = await asyncio.to_thread(_resolve_auth_manager, request)
     shared_client = request.app.state.http_client
 
     try:
@@ -63,7 +64,7 @@ async def get_account(request: Request):
     """
     logger.info("Request to /account")
 
-    auth_manager = _resolve_auth_manager(request)
+    auth_manager = await asyncio.to_thread(_resolve_auth_manager, request)
     shared_client = request.app.state.http_client
 
     try:

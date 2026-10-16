@@ -446,7 +446,7 @@ class ClientCompatMiddleware:
         headers = list(start_message.get("headers", []))
         rewritten = None
         try:
-            rewritten = rewrite_error_response(path, status, body, state, scope.get("app"))
+            rewritten = await asyncio.to_thread(rewrite_error_response, path, status, body, state, scope.get("app"))
         except Exception as e:  # never lose the response over a mapping bug
             logger.warning(f"Error response mapping failed: {e}")
         if rewritten is not None:

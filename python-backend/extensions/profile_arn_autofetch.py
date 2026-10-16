@@ -19,6 +19,7 @@ empty ARN into a real one. ListAvailableProfiles lives on q.{region}.amazonaws.c
 non-fatal and leave behavior exactly as it is today (empty ARN).
 """
 
+import asyncio
 import json
 
 import httpx
@@ -94,7 +95,7 @@ async def _fetch_profile_arn(auth_manager, token: str) -> None:
         # does not persist profile_arn at all, so sqlite accounts simply re-fetch
         # once per process (cheap, guarded).
         if auth_manager._creds_file:
-            auth_manager._save_credentials_to_file()
+            await asyncio.to_thread(auth_manager._save_credentials_to_file)
 
     except Exception as e:
         logger.warning(f"profileArn autofetch failed (will proceed without profileArn): {e}")

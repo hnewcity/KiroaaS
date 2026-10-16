@@ -26,6 +26,7 @@ Contains all API endpoints:
 - /v1/chat/completions: Chat completions
 """
 
+import asyncio
 import json
 from datetime import datetime, timezone
 
@@ -141,7 +142,7 @@ async def get_models(request: Request):
         available_model_ids = request.app.state.account_manager.get_all_available_models()
     else:
         # Legacy: use resolver from first account
-        account = request.app.state.account_manager.get_first_account()
+        account = await asyncio.to_thread(request.app.state.account_manager.get_first_account)
         available_model_ids = account.model_resolver.get_available_models()
     
     # Build OpenAI-compatible model list
@@ -327,7 +328,7 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
             profile_arn_for_payload = auth_manager.profile_arn or PROFILE_ARN or ""
             
             try:
-                kiro_payload = build_kiro_payload(
+                kiro_payload = await asyncio.to_thread(build_kiro_payload,
                     request_data,
                     conversation_id,
                     profile_arn_for_payload
@@ -559,7 +560,7 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
         # ==============================================================================
         # LEGACY MODE: Single Account (no failover)
         # ==============================================================================
-        account = request.app.state.account_manager.get_first_account()
+        account = await asyncio.to_thread(request.app.state.account_manager.get_first_account)
         if not account.auth_manager:
             logger.error("No initialized accounts available (legacy mode)")
             raise HTTPException(503, "No initialized accounts available")
@@ -575,7 +576,7 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
     profile_arn_for_payload = auth_manager.profile_arn or PROFILE_ARN or ""
     
     try:
-        kiro_payload = build_kiro_payload(
+        kiro_payload = await asyncio.to_thread(build_kiro_payload,
             request_data,
             conversation_id,
             profile_arn_for_payload

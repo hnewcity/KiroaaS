@@ -93,3 +93,15 @@ def test_oversized_record_is_not_retained():
     with pytest.raises(NativeReasoningError, match="exceeds"):
         store.record(("client", "account", "model"), identity(), "a", ledger())
     assert store._bytes == 0 and not store._records
+
+
+def test_default_history_survives_long_conversations_and_overnight_idle() -> None:
+    """Native proof is conversation state, not a one-hour authentication token."""
+    store = ReasoningStore()
+    scope = ("client", "account", "model")
+    generated = ledger()
+    with patch("kiro.native_reasoning.time.monotonic", return_value=100):
+        store.record(scope, identity(), "anchor", generated)
+    with patch("kiro.native_reasoning.time.monotonic", return_value=100 + 3 * 86400):
+        found = store.find(scope, "answer", [], reasoning_blocks(generated.blocks))
+    assert found.root_conversation_id == "root"

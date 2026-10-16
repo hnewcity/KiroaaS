@@ -181,7 +181,13 @@ def fake_mcp(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("api,streaming", [("anthropic", True), ("openai", True), ("openai", False)])
 @pytest.mark.parametrize("mixed", [False, True])
-async def test_actual_projection_replays_through_normal_conversion(api: str, streaming: bool, mixed: bool, fake_mcp: AsyncMock) -> None:
+@pytest.mark.parametrize("restart", [False, True])
+async def test_actual_projection_replays_through_normal_conversion(api: str, streaming: bool, mixed: bool,
+                                                                  fake_mcp: AsyncMock, restart: bool,
+                                                                  tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    if restart:
+        from kiro.native_replay_storage import ReplayStorage
+        monkeypatch.setattr(reasoning_store, "storage", ReplayStorage(tmp_path))
     with context() as state:
         initial = build(api, [{"role": "user", "content": "go"}])
         message, _ = await formatted(api, streaming, state, frames(mixed=mixed))
@@ -189,6 +195,11 @@ async def test_actual_projection_replays_through_normal_conversion(api: str, str
         record = next(iter(reasoning_store._records.values()))
         assert record.projections
         assert fake_mcp.await_count == 2
+    if restart:
+        from extensions.session_identity import session_registry
+        reasoning_store.clear()
+        session_registry.clear()
+        monkeypatch.setattr(reasoning_store, "storage", ReplayStorage(tmp_path))
     caller = []
     if mixed:
         caller.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": "client-tool", "content": "caller tool result"}]}
