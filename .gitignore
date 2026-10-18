@@ -315,5 +315,5 @@ Temporary Items
 .kiro/
 kiro-gateway
 kiro-gateway.tar.gz
-# Private encrypted native replay evidence and its separate key
+# Private native replay history
 native-replay/

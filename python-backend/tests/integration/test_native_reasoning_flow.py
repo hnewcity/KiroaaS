@@ -436,14 +436,14 @@ async def test_conflicting_model_hints_do_not_create_a_misbound_native_record():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("api", ["anthropic", "openai"])
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_storage_failure_does_not_mark_native_output_successful(api, streaming, tmp_path, monkeypatch):
-    """A complete-looking stream is not resumable if committing its proof failed."""
+async def test_full_storage_still_completes_native_output(api, streaming, tmp_path, monkeypatch):
+    """An exhausted disk budget keeps evidence in RAM instead of failing the response."""
     from kiro.native_replay_storage import ReplayStorage
     import kiro.streaming_anthropic as anthropic
     import kiro.streaming_openai as openai
 
     storage = ReplayStorage(tmp_path)
-    storage.max_bytes = 1  # Fail the record write, after valid key/schema creation.
+    storage.max_bytes = 1  # Every record is larger than the disk budget.
     monkeypatch.setattr(reasoning_store, "storage", storage)
     with context() as state:
         build(api, request(api, [{"role": "user", "content": "go"}]))
@@ -452,20 +452,12 @@ async def test_storage_failure_does_not_mark_native_output_successful(api, strea
             producer = (anthropic.stream_kiro_to_anthropic(upstream, MODEL, state.model_cache, SimpleNamespace())
                         if api == "anthropic" else
                         openai.stream_kiro_to_openai(None, upstream, MODEL, state.model_cache, SimpleNamespace()))
-            from extensions.kiro_stream_decoder import KiroStreamError
-            chunks = []
-            with pytest.raises(KiroStreamError, match="full"):
-                async for chunk in producer:
-                    chunks.append(chunk)
-            output = "".join(chunks)
-            assert '"type": "message_stop"' not in output and "data: [DONE]" not in output
+            output = "".join([chunk async for chunk in producer])
+            assert '"type": "message_stop"' in output or "data: [DONE]" in output
+        elif api == "anthropic":
+            await anthropic.collect_anthropic_response(upstream, MODEL, state.model_cache, SimpleNamespace())
         else:
-            from extensions.kiro_stream_decoder import KiroStreamError
-            with pytest.raises(KiroStreamError, match="full"):
-                if api == "anthropic":
-                    await anthropic.collect_anthropic_response(upstream, MODEL, state.model_cache, SimpleNamespace())
-                else:
-                    await openai.collect_stream_response(None, upstream, MODEL, state.model_cache, SimpleNamespace())
-        assert state.stream_error is not None
+            await openai.collect_stream_response(None, upstream, MODEL, state.model_cache, SimpleNamespace())
+        assert state.stream_error is None
         assert stream.closed
-        assert not reasoning_store._records
+        assert reasoning_store._records

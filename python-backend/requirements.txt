@@ -4,7 +4,6 @@ uvicorn[standard]
 httpx
 loguru
 python-dotenv
-cryptography>=44.0.0
 tiktoken
 
 # Testing dependencies

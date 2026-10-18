@@ -155,8 +155,8 @@ share the same client namespace across API surfaces.
 Session registry: 1024 sessions, 32 remembered turns each, one-hour sliding TTL.
 Explicit turn IDs remain deterministic after registry eviction; implicit turns may
 get a new continuation. Native replay has no automatic time expiry. A 512-record,
-16 MiB RAM accelerator fronts an encrypted persistent ledger (default logical-value
-budget: 512 MiB). RAM eviction and process restart reload the original scoped record
+16 MiB RAM accelerator fronts a persistent SQLite ledger (default budget: 512 MiB,
+least recently used conversations evicted when full). RAM eviction and process restart reload the original scoped record
 and complete projection receipts; they no longer invalidate signed history. A message
 ledger remains limited to 16 MiB and 4096 blocks. Explicit memory mode opts out of disk
 retention and therefore cannot recover evicted/lost evidence. See NATIVE_REPLAY.md.
@@ -167,7 +167,7 @@ verify the upstream cryptographic signature.
 
 Credential generations distinguish an auth manager's own successful refresh from
 externally reloaded/replaced credentials. They are not verified JWT/principal IDs.
-A separate encrypted credential-continuity binding lets unchanged sources and the
+A separate persistent credential-continuity binding lets unchanged sources and the
 gateway's own refresh writes recover native replay after restart. The in-flight
 credential generation remains process-local; account labels/paths alone never prove
 continuity. External rotation may invalidate native replay. Changes are noticed on loader reads

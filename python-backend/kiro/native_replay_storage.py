@@ -1,138 +1,90 @@
-"""Encrypted, non-expiring replay evidence. Memory eviction is not evidence deletion.
+"""Durable native replay evidence in a plain SQLite ledger.
 
-SQLite contains authenticated encrypted values and keyed lookup indexes only.
-Windows protects the separate encryption key with current-user DPAPI; other hosts
-require an owner-only directory/key. No credential material is persisted: credential
-continuity uses keyed digests, never account labels as proof of identity.
+Records are ordinary JSON rows. The file is private conversation history created
+owner-only, the same protection as the credential files beside it. When the size
+budget is reached the least recently used conversations are evicted, so new
+requests keep working. Credential continuity uses keyed digests, never raw tokens.
 """
 
 from __future__ import annotations
 
 from contextlib import contextmanager
-import base64
 import hashlib
 import hmac
 import json
 import os
 from pathlib import Path
+import secrets
 import sqlite3
-import tempfile
+import time
 from typing import Any, Iterator
 from uuid import uuid4
 
-from cryptography.fernet import Fernet, InvalidToken
+from loguru import logger
 
 
 class ReplayStorageError(ValueError):
-    """Replay storage is unavailable or unauthenticated; never bypass verification."""
+    """Replay storage is unavailable or unreadable; never bypass verification."""
 
 
-def _dpapi(data: bytes, *, decrypt: bool = False) -> bytes:
-    """Protect/unprotect bytes for the current Windows user, without showing UI."""
-    import ctypes
-    from ctypes import wintypes
-
-    class Blob(ctypes.Structure):
-        _fields_ = [("size", wintypes.DWORD), ("data", ctypes.POINTER(ctypes.c_ubyte))]
-
-    buffer = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
-    source, target = Blob(len(data), buffer), Blob()
-    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
-    operation = crypt32.CryptUnprotectData if decrypt else crypt32.CryptProtectData
-    operation.argtypes = [ctypes.POINTER(Blob), ctypes.c_void_p, ctypes.c_void_p,
-                          ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(Blob)]
-    operation.restype = wintypes.BOOL
-    if not operation(ctypes.byref(source), None, None, None, None, 1, ctypes.byref(target)):
-        raise OSError(ctypes.get_last_error(), "Current-user DPAPI failed")
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
-    kernel32.LocalFree.restype = ctypes.c_void_p
-    try:
-        return ctypes.string_at(target.data, target.size)
-    finally:
-        kernel32.LocalFree(target.data)
-
-
-def _load_key(directory: Path, database: Path) -> bytes:
-    """Atomically publish a complete key; never regenerate a lost database key."""
-    path = directory / "replay.key"
-    if path.is_symlink() or database.is_symlink():
-        raise ReplayStorageError("Native replay key/database must not be symbolic links")
-    if not path.exists():
-        if database.exists() and database.stat().st_size:
-            raise ReplayStorageError("Native replay key is missing; restore the original key, not a new one")
-        key = Fernet.generate_key()
-        encoded = b"DPAPI1:" + _dpapi(key) if os.name == "nt" else b"FERNET1:" + key
-        descriptor, temporary = tempfile.mkstemp(prefix=".replay-key-", dir=directory)
-        try:
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(encoded)
-                handle.flush()
-                os.fsync(handle.fileno())
-            try:
-                # Unlike replacing the destination, this preserves a concurrent winner.
-                os.link(temporary, path)
-            except FileExistsError:
-                pass
-        finally:
-            Path(temporary).unlink(missing_ok=True)
-    if os.name != "nt" and path.stat().st_mode & 0o077:
-        raise ReplayStorageError("Native replay key must have owner-only permissions (0600)")
-    encoded = path.read_bytes()
-    if os.name == "nt" and encoded.startswith(b"DPAPI1:"):
-        return _dpapi(encoded[7:], decrypt=True)
-    if os.name != "nt" and encoded.startswith(b"FERNET1:"):
-        return encoded[8:]
-    raise ReplayStorageError("Native replay key format/platform mismatch; restore the original protected key")
+# Only conversation evidence is evictable. Account bindings are tiny and must
+# survive so credential continuity is not silently reset by unrelated traffic.
+_EVICTABLE = ("record", "projection")
+# Files written by the earlier encrypted ledger; they are ignored, never deleted.
+_LEGACY_FILES = ("replay.sqlite3", "replay.key")
 
 
 class ReplayStorage:
-    """Bounded encrypted evidence with atomic writes and no automatic TTL eviction.
+    """Bounded evidence with atomic writes and least-recently-used eviction.
 
     Args:
-        directory: Private application directory containing the database and key.
-        max_bytes: Maximum encrypted value bytes. Full storage refuses new writes;
-            it never silently evicts a conversation needed by another request.
+        directory: Private application directory containing the database.
+        max_bytes: Maximum stored JSON bytes. When full, the least recently used
+            conversations are evicted; a single oversized entry is not persisted.
     """
 
     def __init__(self, directory: Path, max_bytes: int = 512 * 1024 * 1024) -> None:
         if max_bytes < 1:
             raise ValueError("Native replay storage limit must be positive")
         self.directory = Path(directory).absolute()
-        self.path = self.directory / "replay.sqlite3"
+        self.path = self.directory / "history.sqlite3"
         self.max_bytes = max_bytes
         try:
-            if self.directory.is_symlink():
-                raise ReplayStorageError("Native replay directory must not be a symbolic link")
             self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-            if os.name != "nt" and self.directory.stat().st_mode & 0o077:
-                raise ReplayStorageError("Native replay directory must have owner-only permissions (0700)")
-            key = _load_key(self.directory, self.path)
-            try:
-                self._cipher = Fernet(key)
-            except ValueError as error:
-                raise ReplayStorageError("Native replay encryption key is invalid; restore the original key") from error
-            self._index_key = base64.urlsafe_b64decode(key)
             try:
                 descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             except FileExistsError:
                 pass
             else:
                 os.close(descriptor)
-            with self._connection(write=True) as connection:
-                connection.execute("CREATE TABLE IF NOT EXISTS evidence ("
-                                   "kind TEXT NOT NULL, id TEXT NOT NULL, lookup TEXT NOT NULL, "
-                                   "payload BLOB NOT NULL, PRIMARY KEY(kind, id))")
-                connection.execute("CREATE INDEX IF NOT EXISTS evidence_lookup ON evidence(kind, lookup)")
-                row = connection.execute("SELECT payload FROM evidence WHERE kind='meta' AND id='version'").fetchone()
-                if row is None:
-                    if connection.execute("SELECT count(*) FROM evidence").fetchone()[0]:
-                        raise ReplayStorageError("Native replay schema marker is missing")
-                    self._write(connection, "meta", "version", "", {"version": 1})
-                elif self._decode("meta", "version", row[0]) != {"version": 1}:
+        except OSError as error:
+            raise ReplayStorageError("Native replay storage cannot be created; check its directory") from error
+        with self._connection(write=True) as connection:
+            connection.execute("CREATE TABLE IF NOT EXISTS evidence ("
+                               "kind TEXT NOT NULL, id TEXT NOT NULL, lookup TEXT NOT NULL, "
+                               "payload TEXT NOT NULL, size INTEGER NOT NULL, accessed INTEGER NOT NULL, "
+                               "PRIMARY KEY(kind, id))")
+            connection.execute("CREATE INDEX IF NOT EXISTS evidence_lookup ON evidence(kind, lookup)")
+            connection.execute("CREATE INDEX IF NOT EXISTS evidence_accessed ON evidence(accessed)")
+            row = connection.execute("SELECT payload FROM evidence WHERE kind='meta' AND id='index'").fetchone()
+            if row is None:
+                if connection.execute("SELECT count(*) FROM evidence").fetchone()[0]:
+                    raise ReplayStorageError("Native replay index key is missing; restore the original database")
+                secret = secrets.token_hex(32)
+                self._write(connection, "meta", "index", "", {"version": 2, "key": secret})
+            else:
+                meta = self._decode("meta", "index", row[0])
+                secret = meta.get("key")
+                if meta.get("version") != 2 or not isinstance(secret, str) or len(secret) != 64:
                     raise ReplayStorageError("Unsupported native replay schema; keep the original database")
-        except (OSError, sqlite3.Error, InvalidToken) as error:
-            raise ReplayStorageError("Native replay storage cannot be opened/unlocked; check its directory and key") from error
+        try:
+            self._index_key = bytes.fromhex(secret)
+        except ValueError as error:
+            raise ReplayStorageError("Native replay index key is invalid; restore the original database") from error
+        legacy = [name for name in _LEGACY_FILES if (self.directory / name).exists()]
+        if legacy:
+            logger.warning(f"Ignoring legacy encrypted native replay files {legacy} in {self.directory}; "
+                           "they are no longer read and can be deleted")
 
     @contextmanager
     def _connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
@@ -158,41 +110,88 @@ class ReplayStorage:
         material = json.dumps([domain, value], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hmac.new(self._index_key, material.encode("utf-8"), hashlib.sha256).hexdigest()
 
-    def _decode(self, kind: str, key: str, payload: bytes) -> dict[str, Any]:
-        """Authenticate the value and its row identity before returning any data."""
+    @staticmethod
+    def _decode(kind: str, key: str, payload: Any) -> dict[str, Any]:
+        """Check the row's own identity before returning any data."""
         try:
-            envelope = json.loads(self._cipher.decrypt(payload))
-            if (not isinstance(envelope, dict) or envelope.get("kind") != kind
-                    or envelope.get("id") != key or not isinstance(envelope.get("value"), dict)):
-                raise ReplayStorageError("Native replay record identity is invalid; do not bypass history verification")
-            return envelope["value"]
-        except (InvalidToken, ValueError, UnicodeError) as error:
-            raise ReplayStorageError("Native replay record cannot be authenticated; restore the original database/key") from error
+            envelope = json.loads(payload)
+        except (TypeError, ValueError) as error:
+            raise ReplayStorageError("Native replay record is unreadable; the database may be corrupt") from error
+        if (not isinstance(envelope, dict) or envelope.get("kind") != kind
+                or envelope.get("id") != key or not isinstance(envelope.get("value"), dict)):
+            raise ReplayStorageError("Native replay record identity is invalid; do not bypass history verification")
+        return envelope["value"]
+
+    def _evict(self, connection: sqlite3.Connection, needed: int, kind: str, key: str) -> int:
+        """Delete least recently used evidence, except the row being written."""
+        placeholders = ",".join("?" for _ in _EVICTABLE)
+        cursor = connection.execute(f"SELECT rowid, size FROM evidence WHERE kind IN ({placeholders}) "
+                                    "AND NOT (kind=? AND id=?) ORDER BY accessed, rowid",
+                                    (*_EVICTABLE, kind, key))
+        victims, freed = [], 0
+        for rowid, size in cursor:
+            if freed >= needed:
+                break
+            victims.append((rowid,))
+            freed += size
+        cursor.close()
+        connection.executemany("DELETE FROM evidence WHERE rowid=?", victims)
+        if victims:
+            logger.info(f"Native replay storage reached its budget; evicted {len(victims)} least recently used entries")
+        return freed
 
     def _write(self, connection: sqlite3.Connection, kind: str, key: str, lookup: str,
-               value: dict[str, Any]) -> None:
-        """Write one complete encrypted record without evicting other evidence."""
-        encoded = json.dumps({"kind": kind, "id": key, "value": value}, ensure_ascii=False,
-                             separators=(",", ":")).encode("utf-8")
-        payload = self._cipher.encrypt(encoded)
-        used = connection.execute("SELECT coalesce(sum(length(payload)), 0) FROM evidence").fetchone()[0]
-        previous = connection.execute("SELECT length(payload) FROM evidence WHERE kind=? AND id=?", (kind, key)).fetchone()
-        if used + len(payload) - (previous[0] if previous else 0) > self.max_bytes:
-            raise ReplayStorageError("Native replay storage is full; increase KIRO_NATIVE_REPLAY_MAX_BYTES or explicitly clear unneeded history")
-        connection.execute("INSERT INTO evidence(kind, id, lookup, payload) VALUES(?, ?, ?, ?) "
-                           "ON CONFLICT(kind, id) DO UPDATE SET lookup=excluded.lookup, payload=excluded.payload",
-                           (kind, key, lookup, payload))
+               value: dict[str, Any]) -> bool:
+        """Write one complete record, evicting old evidence when over budget.
 
-    def put(self, kind: str, key: str, value: dict[str, Any], *, lookup: str = "") -> None:
-        """Commit authenticated evidence before it becomes available in RAM."""
+        Returns:
+            False when the entry alone exceeds the budget and was not persisted.
+        """
+        payload = json.dumps({"kind": kind, "id": key, "value": value}, ensure_ascii=False,
+                             separators=(",", ":"))
+        size = len(payload.encode("utf-8"))
+        if size > self.max_bytes:
+            logger.warning(f"Native replay {kind} entry ({size} bytes) exceeds KIRO_NATIVE_REPLAY_MAX_BYTES; "
+                           "kept in memory only")
+            return False
+        used = connection.execute("SELECT coalesce(sum(size), 0) FROM evidence").fetchone()[0]
+        previous = connection.execute("SELECT size FROM evidence WHERE kind=? AND id=?", (kind, key)).fetchone()
+        excess = used + size - (previous[0] if previous else 0) - self.max_bytes
+        if excess > 0 and self._evict(connection, excess, kind, key) < excess:
+            logger.warning(f"Native replay storage cannot free space for a {kind} entry; kept in memory only")
+            return False
+        connection.execute("INSERT INTO evidence(kind, id, lookup, payload, size, accessed) VALUES(?, ?, ?, ?, ?, ?) "
+                           "ON CONFLICT(kind, id) DO UPDATE SET lookup=excluded.lookup, payload=excluded.payload, "
+                           "size=excluded.size, accessed=excluded.accessed",
+                           (kind, key, lookup, payload, size, time.time_ns()))
+        return True
+
+    def _touch(self, rowid: int) -> None:
+        """Mark evidence as recently used; a failed update only affects eviction order."""
+        try:
+            with self._connection(write=True) as connection:
+                connection.execute("UPDATE evidence SET accessed=? WHERE rowid=?", (time.time_ns(), rowid))
+        except ReplayStorageError as error:
+            logger.debug(f"Native replay access time was not updated: {error}")
+
+    def put(self, kind: str, key: str, value: dict[str, Any], *, lookup: str = "") -> bool:
+        """Commit evidence before it becomes available in RAM.
+
+        Returns:
+            False when the entry was too large to persist under the budget.
+        """
         with self._connection(write=True) as connection:
-            self._write(connection, kind, key, lookup, value)
+            return self._write(connection, kind, key, lookup, value)
 
     def get(self, kind: str, key: str) -> dict[str, Any] | None:
         """Read one exact key, distinguishing absence from an unreadable store."""
         with self._connection() as connection:
-            row = connection.execute("SELECT payload FROM evidence WHERE kind=? AND id=?", (kind, key)).fetchone()
-            return self._decode(kind, key, row[0]) if row else None
+            row = connection.execute("SELECT rowid, payload FROM evidence WHERE kind=? AND id=?", (kind, key)).fetchone()
+        if row is None:
+            return None
+        value = self._decode(kind, key, row[1])
+        self._touch(row[0])
+        return value
 
     def find(self, kind: str, lookup: str) -> Iterator[dict[str, Any]]:
         """Yield candidates; callers still verify their complete semantic identity."""
@@ -208,7 +207,9 @@ class ReplayStorage:
             if row is None:
                 return
             before, key, payload = row
-            yield self._decode(kind, key, payload)
+            value = self._decode(kind, key, payload)
+            self._touch(before)
+            yield value
 
     def bind_credentials(self, namespace: str, observed: dict[str, str], owned: dict[str, str],
                          *, expected: str | None, rotate: bool) -> str:

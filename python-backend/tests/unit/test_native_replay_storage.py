@@ -1,4 +1,4 @@
-"""Offline encrypted replay persistence, integrity, quota and process isolation."""
+"""Offline replay persistence, integrity, LRU budget and process isolation."""
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -17,7 +17,7 @@ from tests.unit.test_native_reasoning import identity, ledger
 from tests.unit.test_native_projection import fixture_projection, SCOPE
 
 
-def test_encrypted_records_survive_restart_and_memory_eviction(tmp_path: Path) -> None:
+def test_records_survive_restart_and_memory_eviction(tmp_path: Path) -> None:
     """The earliest turn remains recoverable beyond the old 512-record ceiling."""
     storage = ReplayStorage(tmp_path)
     store = ReasoningStore(max_records=2, storage=storage)
@@ -30,10 +30,6 @@ def test_encrypted_records_survive_restart_and_memory_eviction(tmp_path: Path) -
     found = restarted.find(SCOPE, "answer", [], reasoning_blocks(original.blocks))
     assert found.root_conversation_id == "root"
     assert len(restarted._records) == 1
-    raw = storage.path.read_bytes()
-    assert b'"thinking"' not in raw and b'"signature"' not in raw
-    assert b"fixture-512" not in raw and b"private-original-turn-fixture" not in raw
-    assert b"thought" not in (tmp_path / "replay.key").read_bytes()
 
 
 @pytest.mark.parametrize("anthropic", [True, False])
@@ -80,37 +76,67 @@ def test_restart_does_not_bypass_scope_isolation(tmp_path: Path, field: int) -> 
         store.find(SCOPE, "edited-answer", [], reasoning_blocks(original.blocks))
 
 
-def test_quota_refuses_new_write_without_deleting_old_proof(tmp_path: Path) -> None:
-    """A storage limit is an explicit failure, never silent LRU history loss."""
+def _payload_size(kind: str, key: str, value: dict) -> int:
+    return len(json.dumps({"kind": kind, "id": key, "value": value}, ensure_ascii=False,
+                          separators=(",", ":")).encode("utf-8"))
+
+
+def test_full_storage_evicts_least_recently_used_evidence(tmp_path: Path) -> None:
+    """Reaching the budget drops the oldest unused history instead of failing writes."""
+    entry = {"message": "x" * 200}
+    size = _payload_size("record", "a", entry)
+    meta = _payload_size("meta", "index", {"version": 2, "key": "0" * 64})
+    storage = ReplayStorage(tmp_path, max_bytes=meta + 3 * size)
+    for key in "abc":
+        assert storage.put("record", key, entry)
+    assert storage.get("record", "a") == entry  # "b" is now least recently used
+    assert storage.put("record", "d", entry)
+    assert storage.get("record", "b") is None
+    assert all(storage.get("record", key) == entry for key in "acd")
+
+
+def test_eviction_never_removes_account_bindings(tmp_path: Path) -> None:
+    """Credential continuity survives conversation eviction."""
     storage = ReplayStorage(tmp_path, max_bytes=4096)
-    storage.put("test", "old", {"message": "keep"})
-    with pytest.raises(ReplayStorageError, match="full"):
-        storage.put("test", "new", {"message": "x" * 10000})
-    assert storage.get("test", "new") is None
-    assert storage.get("test", "old") == {"message": "keep"}
+    binding = storage.bind_credentials("account", {"json": "aa"}, {}, expected=None, rotate=False)
+    for index in range(40):
+        assert storage.put("record", str(index), {"message": "x" * 200})
+    assert storage.bind_credentials("account", {"json": "aa"}, {}, expected=None, rotate=False) == binding
 
 
-def test_missing_key_is_not_recreated(tmp_path: Path) -> None:
-    """Losing the key requires restoring it, not silently starting another ledger."""
-    ReplayStorage(tmp_path).put("test", "old", {"data": "private"})
-    (tmp_path / "replay.key").unlink()
-    with pytest.raises(ReplayStorageError, match="key is missing"):
-        ReplayStorage(tmp_path)
-    assert not (tmp_path / "replay.key").exists()
+def test_oversized_entry_is_skipped_without_deleting_history(tmp_path: Path) -> None:
+    """A single entry above the budget is kept in RAM only; disk history is untouched."""
+    storage = ReplayStorage(tmp_path, max_bytes=4096)
+    assert storage.put("record", "old", {"message": "keep"})
+    assert storage.put("record", "new", {"message": "x" * 10000}) is False
+    assert storage.get("record", "new") is None
+    assert storage.get("record", "old") == {"message": "keep"}
 
 
-def test_corrupt_record_and_swapped_rows_fail_authentication(tmp_path: Path) -> None:
-    """Authenticated envelopes bind ciphertext to its kind and record key."""
+def test_full_storage_does_not_break_reasoning_store(tmp_path: Path) -> None:
+    """The ledger keeps accepting responses after the disk budget is exhausted."""
+    store = ReasoningStore(storage=ReplayStorage(tmp_path, max_bytes=8192))
+    for index in range(50):
+        store.record(SCOPE, identity(), str(index), ledger(signature=f"fixture-{index}"))
+    latest = ledger(signature="fixture-49")
+    restarted = ReasoningStore(storage=ReplayStorage(tmp_path, max_bytes=8192))
+    assert restarted.find(SCOPE, "answer", [], reasoning_blocks(latest.blocks)) is not None
+    with pytest.raises(NativeReasoningError, match="native_history_unavailable"):
+        restarted.find(SCOPE, "answer", [], reasoning_blocks(ledger(signature="fixture-0").blocks))
+
+
+def test_corrupt_record_and_swapped_rows_are_rejected(tmp_path: Path) -> None:
+    """Each row carries its own kind and key, so moved or broken rows fail closed."""
     storage = ReplayStorage(tmp_path)
     storage.put("test", "a", {"data": "one"})
     storage.put("test", "b", {"data": "two"})
     with sqlite3.connect(storage.path) as connection:
         connection.execute("UPDATE evidence SET payload=(SELECT payload FROM evidence WHERE id='a') WHERE id='b'")
-    with pytest.raises(ReplayStorageError, match="authenticated"):
+    with pytest.raises(ReplayStorageError, match="identity"):
         storage.get("test", "b")
     with sqlite3.connect(storage.path) as connection:
-        connection.execute("UPDATE evidence SET payload=? WHERE id='a'", (b"broken",))
-    with pytest.raises(ReplayStorageError, match="authenticated"):
+        connection.execute("UPDATE evidence SET payload=? WHERE id='a'", ("broken",))
+    with pytest.raises(ReplayStorageError, match="unreadable"):
         storage.get("test", "a")
 
 
@@ -122,8 +148,8 @@ def test_read_failure_is_not_reported_as_missing_history(tmp_path: Path) -> None
         storage.get("test", "record")
 
 
-def test_concurrent_initialization_uses_one_complete_key(tmp_path: Path) -> None:
-    """Parallel initializers never read a half-written or replaced encryption key."""
+def test_concurrent_initialization_uses_one_index_key(tmp_path: Path) -> None:
+    """Parallel initializers agree on a single lookup key."""
     def initialize(index: int) -> str:
         store = ReplayStorage(tmp_path)
         store.put("test", str(index), {"index": index})
@@ -150,7 +176,7 @@ def test_real_subprocess_can_reopen_proof(tmp_path: Path) -> None:
 
 
 def test_explicit_memory_mode_and_lifecycle_configuration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Configuration is lazy; memory opt-out never creates a database/key."""
+    """Configuration is lazy; memory opt-out never creates a database."""
     from kiro.native_reasoning import initialize_native_replay, shutdown_native_replay, reasoning_store
     from kiro.native_replay_storage import current_storage
 
@@ -165,7 +191,7 @@ def test_explicit_memory_mode_and_lifecycle_configuration(tmp_path: Path, monkey
         assert current_storage().path.is_file()
         shutdown_native_replay()
         assert current_storage() is None
-        assert (tmp_path / "private" / "replay.sqlite3").exists()
+        assert (tmp_path / "private" / "history.sqlite3").exists()
     finally:
         shutdown_native_replay()
 
@@ -182,20 +208,28 @@ def test_invalid_configuration_fails_closed(tmp_path: Path, monkeypatch: pytest.
         initialize_native_replay(str(tmp_path / "state.json"))
 
 
-def test_other_database_key_cannot_unlock_existing_history(tmp_path: Path) -> None:
-    """A valid but unrelated encryption key must not make old records look absent."""
-    first, second = tmp_path / "a", tmp_path / "b"
-    ReplayStorage(first).put("test", "record", {"data": "private"})
-    ReplayStorage(second)
-    (first / "replay.key").write_bytes((second / "replay.key").read_bytes())
-    with pytest.raises(ReplayStorageError, match="authenticated"):
-        ReplayStorage(first)
-
-
 @pytest.mark.skipif(os.name == "nt", reason="POSIX filesystem permission policy")
-def test_shared_key_permissions_are_rejected(tmp_path: Path) -> None:
-    """Without a Windows keystore, the raw key must not be readable by others."""
-    ReplayStorage(tmp_path)
-    (tmp_path / "replay.key").chmod(0o644)
-    with pytest.raises(ReplayStorageError, match="owner-only"):
-        ReplayStorage(tmp_path)
+def test_database_is_created_owner_only(tmp_path: Path) -> None:
+    """New history files get the same owner-only mode as credential files."""
+    storage = ReplayStorage(tmp_path / "private")
+    assert storage.path.stat().st_mode & 0o777 == 0o600
+    assert storage.directory.stat().st_mode & 0o777 == 0o700
+
+
+def test_shared_permissions_do_not_block_startup(tmp_path: Path) -> None:
+    """Loose permissions are not a reason to refuse to start."""
+    storage = ReplayStorage(tmp_path)
+    storage.put("test", "record", {"data": "kept"})
+    storage.path.chmod(0o644)
+    tmp_path.chmod(0o755)
+    assert ReplayStorage(tmp_path).get("test", "record") == {"data": "kept"}
+
+
+def test_legacy_encrypted_files_are_ignored(tmp_path: Path) -> None:
+    """Old encrypted ledgers are left alone and never block a new database."""
+    (tmp_path / "replay.sqlite3").write_bytes(b"legacy-encrypted")
+    (tmp_path / "replay.key").write_bytes(b"FERNET1:legacy")
+    storage = ReplayStorage(tmp_path)
+    storage.put("test", "record", {"data": "new"})
+    assert storage.get("test", "record") == {"data": "new"}
+    assert (tmp_path / "replay.sqlite3").read_bytes() == b"legacy-encrypted"

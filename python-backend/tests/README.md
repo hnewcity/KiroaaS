@@ -191,8 +191,8 @@ If you find bugs or have suggestions for test improvements, create an issue in t
 
 ### Durable native replay
 
-`unit/test_native_replay_storage.py` covers the encrypted ledger, restart, concurrent
-key publication, quota/integrity failures and lifecycle configuration. Native reasoning,
+`unit/test_native_replay_storage.py` covers the SQLite ledger, restart, concurrent
+initialization, LRU eviction at the size budget, integrity failures and lifecycle configuration. Native reasoning,
 projection, credential identity and account-binding tests cover security boundaries.
 `integration/test_native_reasoning_flow.py` and `test_native_server_projection.py`
 exercise cold-cache/restarted ledgers through real converters and both API adapters.

@@ -79,8 +79,8 @@ def test_durable_binding_survives_restart_and_own_refresh(tmp_path, monkeypatch)
     assert first.replay_binding("account-A") == replay
     assert second.replay_binding("account-A") == replay
     assert second.replay_binding("account-B") != replay
-    assert b"fake-old" not in storage.path.read_bytes()
-    assert b"fake-new" not in storage.path.read_bytes()
+    raw = storage.path.read_bytes()
+    assert b"fake-old" not in raw and b"fake-new" not in raw
 
 
 def test_durable_external_replacement_and_aba_never_revive_scope(tmp_path, monkeypatch) -> None:

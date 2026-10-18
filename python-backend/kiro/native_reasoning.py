@@ -2,7 +2,7 @@
 
 Signatures and encrypted blocks are opaque, not gateway-generated signatures.
 Only responses actually decoded by this gateway become replay evidence. Ordered
-assistant blocks and complete projections are stored in an encrypted durable ledger;
+assistant blocks and complete projections are stored in a durable SQLite ledger;
 RAM is a bounded accelerator, not the source of authority. Default evidence has no
 time expiry. Missing provenance never permits another account's state to be used.
 """
@@ -295,7 +295,7 @@ class ReasoningStore:
             raise ReplayStorageError("Native replay record schema is invalid; restore the original database") from error
 
     def _candidates(self, scope: tuple[str, str, str], native: Any) -> Iterator[ReasoningRecord]:
-        """Search RAM first, then disk, including records evicted in another run."""
+        """Search RAM first, then disk, including records evicted from RAM in another run."""
         self._expire()
         yield from reversed(list(self._records.values()))
         if self.storage is not None:
@@ -405,7 +405,7 @@ reasoning_store = ReasoningStore()
 
 
 def initialize_native_replay(state_file: str) -> None:
-    """Configure encrypted replay before account initialization, without import I/O.
+    """Configure durable replay before account initialization, without import I/O.
 
     Args:
         state_file: Existing application state path; the default private replay
