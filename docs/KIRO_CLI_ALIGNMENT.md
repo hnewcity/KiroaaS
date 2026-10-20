@@ -134,7 +134,8 @@ This compatibility mapping is schema-backed, not something source `luo` emits.
 | KIRO_UPSTREAM_REQUEST_DEADLINE | 300 seconds | Transport/auth/backoff/first-response waiting budget |
 | STREAMING_READ_TIMEOUT | existing app setting | Body read-idle limit, not total response lifetime |
 | KIRO_STREAM_TOTAL_TIMEOUT | 0 | Explicit optional hard successful-stream lifetime |
-| KIRO_ADDITIONAL_MODEL_FIELDS | true | Native fields; disabling rejects explicit controls instead of ignoring them |
+| KIRO_ADDITIONAL_MODEL_FIELDS | true | Automatic native fields; explicit client controls are always forwarded |
+| KIRO_TOOLLESS_NATIVE_HISTORY | transcript | Tool-free evaluation uses ordinary transcript; strict disables that conversion |
 | KIRO_LEGACY_FAKE_REASONING | false | Explicit legacy text tags, separate from native reasoning |
 | KIRO_ALLOW_ADDITIONAL_FIELDS_FALLBACK | false | Explicit unsupported-field deletion with bounded scoped TTL |
 | STABLE_CONVERSATION_ID | true | Recognize explicit session metadata, never prompt-hash identity |
@@ -161,16 +162,16 @@ and complete projection receipts; they no longer invalidate signed history. A me
 ledger remains limited to 16 MiB and 4096 blocks. Explicit memory mode opts out of disk
 retention and therefore cannot recover evicted/lost evidence. See NATIVE_REPLAY.md.
 OpenAI clients must preserve reasoning_details. Actual signatures/opaque bytes are
-not fabricated or converted to prompt text. Missing/altered/unverified state still
-fails closed; persistence does not authorize arbitrary imported history or locally
-verify the upstream cryptographic signature.
+not fabricated. Missing local evidence uses caller-supplied history and leaves
+signature validation to upstream. Tool-free requests use ordinary transcript by
+default. Persistence is optional reconstruction, not a request authorization gate.
 
 Credential generations distinguish an auth manager's own successful refresh from
 externally reloaded/replaced credentials. They are not verified JWT/principal IDs.
 A separate persistent credential-continuity binding lets unchanged sources and the
 gateway's own refresh writes recover native replay after restart. The in-flight
 credential generation remains process-local; account labels/paths alone never prove
-continuity. External rotation may invalidate native replay. Changes are noticed on loader reads
+continuity. External rotation may invalidate a cache match, not the request. Changes are noticed on loader reads
 and refresh rechecks, not by continuous filesystem watching or cross-process locking.
 An in-flight source replacement yields an actionable 409 before the prepared payload
 is sent. The next request binds the new epoch.

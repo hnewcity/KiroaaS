@@ -171,8 +171,21 @@ def test_observed_effort_mapping(fields: dict, expected: str | None) -> None:
     assert payload.get("reasoning") == ({"effort": expected} if expected is not None else None)
 
 
+def test_hook_structured_output_format_is_mapped_and_detached() -> None:
+    """JSON-schema evaluator output is representable in Responses text.format."""
+    fmt = {"type": "json_schema", "schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]}}
+    value = command(additionalModelRequestFields={"output_config": {"format": fmt}, "max_tokens": 1024})
+    before = copy.deepcopy(value)
+    payload = build(value)
+    assert payload["text"]["format"] == {**fmt, "name": "response"}
+    assert payload["max_output_tokens"] == 1024
+    payload["text"]["format"]["schema"]["required"].append("other")
+    assert value == before
+    assert "reasoning" not in build(command(additionalModelRequestFields={"reasoning": {}}))
+
+
 @pytest.mark.parametrize("fields", [{"thinking": {"type": "adaptive"}},
-    {"thinking": {"type": "disabled", "budget_tokens": 4}}, {"reasoning": {}}, {"reasoning": None},
+    {"thinking": {"type": "disabled", "budget_tokens": 4}}, {"reasoning": None},
     {"reasoning": {"effort": ""}}, {"reasoning": {"effort": "high", "summary": "auto"}},
     {"reasoning": {"effort": "high"}, "output_config": {"effort": "low"}},
     {"reasoning": {"effort": "high"}, "thinking": {"type": "disabled"}}])

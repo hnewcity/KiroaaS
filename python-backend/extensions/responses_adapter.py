@@ -428,8 +428,15 @@ def _additional_fields(value: Any) -> dict:
     efforts = []
     for key in ("output_config", "reasoning"):
         if key in obj:
-            sub = _object(obj[key], path + "." + key, {"effort"})
-            efforts.append(_text(sub.get("effort"), path + "." + key + ".effort", nonempty=True))
+            sub = _object(obj[key], path + "." + key, {"effort", "format"} if key == "output_config" else {"effort"})
+            if "effort" in sub:
+                efforts.append(_text(sub["effort"], path + "." + key + ".effort", nonempty=True))
+            if "format" in sub:
+                fmt = _object(sub["format"], path + ".output_config.format", {"type", "schema", "name", "description", "strict"})
+                mapped = dict(fmt)
+                if mapped.get("type") == "json_schema":
+                    mapped.setdefault("name", "response")
+                result["text"] = {"format": mapped}
     if "thinking" in obj:
         sub = _object(obj["thinking"], path + ".thinking", {"type"})
         if sub.get("type") != "disabled":

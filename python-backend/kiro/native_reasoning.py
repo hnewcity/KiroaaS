@@ -1,10 +1,10 @@
-"""Native reasoning preservation and bounded, account/model-bound replay state.
+"""Native reasoning forwarding and optional, scoped reconstruction caches.
 
 Signatures and encrypted blocks are opaque, not gateway-generated signatures.
 Only responses actually decoded by this gateway become replay evidence. Ordered
 assistant blocks and complete projections are stored in a durable SQLite ledger;
-RAM is a bounded accelerator, not the source of authority. Default evidence has no
-time expiry. Missing provenance never permits another account's state to be used.
+RAM is a bounded accelerator with a memory-only fallback. Cache misses never gate
+forwarding of caller history or permit another account's cached state to be used.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import threading
 import time
 import uuid
 from typing import Any, Iterator
+from loguru import logger
 
 from kiro.native_replay_storage import ReplayStorage, ReplayStorageError, set_storage
 
@@ -216,15 +217,30 @@ class ReasoningStore:
             return
         encoded = json.dumps({"scope": scope, "identity": [identity.conversation_id, identity.root_conversation_id, identity.continuation_id], "anchor": anchor, "blocks": ledger.blocks}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(encoded) > self.max_bytes:
-            raise NativeReasoningError("Native response exceeds the bounded replay cache; reduce response size")
+            logger.warning("Native response exceeds replay cache budget; continuing without caching")
+            return
         record = ReasoningRecord(scope, identity.conversation_id, identity.root_conversation_id,
                                  identity.continuation_id, anchor, deepcopy(ledger.blocks),
                                  time.monotonic() + self.ttl if self.ttl is not None else float("inf"), len(encoded))
         with self._lock:
             if self.storage is not None:
-                self.storage.put("record", self._record_key(record), self._serialize(record),
-                                 lookup=self._native_key(scope, reasoning_blocks(record.blocks)))
+                try:
+                    self.storage.put("record", self._record_key(record), self._serialize(record),
+                                     lookup=self._native_key(scope, reasoning_blocks(record.blocks)))
+                except ReplayStorageError:
+                    logger.warning("Native replay write unavailable; keeping response in memory")
             self._remember(record)
+
+    def lookup(self, scope: tuple[str, str, str], text: str, tools: list[dict[str, Any]] | None,
+               native: list[dict[str, str]]) -> ReasoningRecord | None:
+        """Use matching cached history when available, without gating requests."""
+        try:
+            return self.find(scope, text, tools, native)
+        except NativeReasoningError:
+            return None
+        except ReplayStorageError:
+            logger.warning("Native replay read unavailable; using caller-supplied history")
+            return None
 
     def find(
         self, scope: tuple[str, str, str], text: str, tools: list[dict[str, Any]] | None,
@@ -418,7 +434,10 @@ def initialize_native_replay(state_file: str) -> None:
     if mode == "persistent":
         directory = Path(os.getenv("KIRO_NATIVE_REPLAY_DIR") or (Path(state_file).absolute().parent / "native-replay"))
         budget = int(os.getenv("KIRO_NATIVE_REPLAY_MAX_BYTES", str(512 * 1024 * 1024)))
-        storage = ReplayStorage(directory, max_bytes=budget)
+        try:
+            storage = ReplayStorage(directory, max_bytes=budget)
+        except ReplayStorageError:
+            logger.warning("Native replay storage unavailable; starting with memory cache")
     reasoning_store.clear()
     reasoning_store.storage = storage
     set_storage(storage)
@@ -433,9 +452,14 @@ def shutdown_native_replay() -> None:
 
 def expand_history(record: ReasoningRecord, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Restore CLI-style ordered assistant entries with current reversible aliases."""
+    return expand_blocks(record.blocks, tools)
+
+
+def expand_blocks(blocks: list[dict[str, Any]], tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Serialize caller or cached ordered blocks; upstream validates signatures."""
     by_id = {str(tool.get("toolUseId")): tool for tool in tools}
     entries = []
-    for block in record.blocks:
+    for block in blocks:
         message: dict[str, Any] = {"content": ""}
         if block["type"] == "text":
             message["content"] = block["text"]
@@ -452,6 +476,30 @@ def expand_history(record: ReasoningRecord, tools: list[dict[str, Any]]) -> list
             message["toolUses"] = [tool]
         entries.append({"assistantResponseMessage": message})
     return entries
+
+
+def forward_native_history(content: str, tools: list[dict[str, Any]], blocks: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """Forward supplied native blocks without requiring locally stored proof.
+
+    Anthropic keeps original block order. Flattened OpenAI history uses thinking,
+    text, then tools when no original ordered record is available. If gateway
+    repair changed the text/tool set, use the repaired ordinary transcript instead
+    of attaching native state to changed content.
+    """
+    if not blocks or not reasoning_blocks(blocks):
+        return None
+    if any(block.get("type") in ("text", "tool_use") for block in blocks):
+        original_text = "".join(block["text"] for block in blocks if block.get("type") == "text")
+        original_tools = [block for block in blocks if block.get("type") == "tool_use"]
+        if original_text != content or tool_ids(original_tools) != tool_ids(tools):
+            logger.debug("Repaired native turn forwarded as ordinary transcript")
+            return None
+        return expand_blocks(blocks, tools)
+    assembled: list[dict[str, Any]] = list(reasoning_blocks(blocks))
+    if content:
+        assembled.append({"type": "text", "text": content})
+    assembled.extend({"type": "tool_use", "id": tool["toolUseId"]} for tool in tools)
+    return expand_blocks(assembled, tools)
 
 
 def _projection_json(value: Any) -> str:
@@ -480,6 +528,57 @@ def _plain_projection(value: Any) -> Any:
     return value
 
 
+def native_history_as_transcript(messages: list[Any], *, anthropic: bool) -> list[Any]:
+    """Omit native state from an explicitly selected tool-free transcript.
+
+    Args:
+        messages: Caller messages, which are never mutated.
+        anthropic: Whether native blocks live in Anthropic content rather than
+            OpenAI reasoning fields.
+
+    Returns:
+        Messages with assistant thinking/signatures/opaque state omitted. Ordinary
+        content and tool data remain available to the existing tool-to-text
+        conversion. Server-tool events become text because ordinary converters
+        otherwise ignore them. No replay receipt is consulted or created: this is
+        caller-supplied transcript data, not authenticated native continuation.
+        User messages and nested tool payloads are not filtered.
+    """
+    result = []
+    omission = "[Assistant reasoning omitted from evaluation transcript.]"
+    for message in messages:
+        raw = _plain_projection(message)
+        if raw.get("role") != "assistant":
+            result.append(message)
+            continue
+        updated = deepcopy(raw)
+        changed = False
+        if anthropic and isinstance(raw.get("content"), list):
+            content = []
+            for block in updated["content"]:
+                if block.get("type") in ("thinking", "redacted_thinking"):
+                    changed = True
+                elif block.get("type") in ("server_tool_use", "web_search_tool_result"):
+                    content.append({"type": "text", "text": "\n[Previous server tool event]\n" + _projection_json(block) + "\n"})
+                    changed = True
+                else:
+                    content.append(block)
+            if changed:
+                updated["content"] = content or [{"type": "text", "text": omission}]
+        elif not anthropic:
+            for field_name in ("reasoning_details", "reasoning_content"):
+                if updated.get(field_name) is not None:
+                    changed = True
+                    updated[field_name] = None
+            if changed and not updated.get("content") and not updated.get("tool_calls"):
+                updated["content"] = omission
+        if changed:
+            result.append(type(message).model_validate(updated) if hasattr(message, "model_validate") else updated)
+        else:
+            result.append(message)
+    return result
+
+
 def _openai_projection(blocks: list[dict[str, Any]]) -> dict[str, Any]:
     """Represent exactly the text, native details and remaining OpenAI tools."""
     return {
@@ -489,11 +588,11 @@ def _openai_projection(blocks: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _openai_replay(message: dict[str, Any]) -> dict[str, Any]:
+def _openai_replay(message: dict[str, Any], *, verify_text: bool = True) -> dict[str, Any]:
     """Normalize reversible OpenAI JSON arguments and reasoning delta indexes."""
     details = reasoning_blocks(message.get("reasoning_details"), include_unsigned=True)
     text = message.get("reasoning_content")
-    if text not in (None, "", "".join(block.get("thinking", "") for block in details)):
+    if verify_text and text not in (None, "", "".join(block.get("thinking", "") for block in details)):
         raise NativeReasoningError("Projected reasoning_content differs from its native details")
     tools = []
     for tool in message.get("tool_calls") or []:
@@ -606,7 +705,8 @@ class NativeProjectionRecorder:
         if original.get("type") != "tool_use" or original.get("id") != tool_id or original.get("name") != "web_search":
             return
         if self._ledger is not None and self._ledger is not ledger:
-            raise NativeReasoningError("Gateway projection crossed decoder response boundaries")
+            self._discard_observation()
+            return
         self._ledger = ledger
         search_content = [{"type": "web_search_result", "title": item.get("title", ""),
                            "url": item.get("url", ""), "encrypted_content": item.get("snippet", ""),
@@ -623,7 +723,8 @@ class NativeProjectionRecorder:
         }
         self._bytes += len(_projection_json(exchange).encode("utf-8"))
         if self._bytes > reasoning_store.max_bytes or len(self._exchanges) >= 4096:
-            raise NativeReasoningError("Gateway projection exceeds the bounded receipt budget")
+            self._discard_observation()
+            return
         self._exchanges[len(ledger.blocks) - 1] = deepcopy(exchange)
 
     def finish(self) -> None:
@@ -633,17 +734,20 @@ class NativeProjectionRecorder:
                 or state.native_ledger is not ledger or state.wire_identity is None
                 or not state.account_scope or not state.upstream_model_id):
             return
-        reasoning_store.record_projection(
-            (state.client_scope, state.account_scope, state.response_model_id or state.upstream_model_id),
-            state.wire_identity, state.input_turn_anchor, ledger, self._exchanges, anthropic=self._anthropic,
-            emitted=([self._blocks[index] for index in sorted(self._blocks)] if self._anthropic
-                     else _openai_replay(self._openai)),
-        )
+        try:
+            reasoning_store.record_projection(
+                (state.client_scope, state.account_scope, state.response_model_id or state.upstream_model_id),
+                state.wire_identity, state.input_turn_anchor, ledger, self._exchanges, anthropic=self._anthropic,
+                emitted=([self._blocks[index] for index in sorted(self._blocks)] if self._anthropic
+                         else _openai_replay(self._openai)),
+            )
+        except (NativeReasoningError, ReplayStorageError):
+            logger.warning("Native projection not cached; completed response remains usable")
 
 
 def restore_native_projections(
     messages: list[Any], *, scope: tuple[str, str, str], anthropic: bool,
-    store: ReasoningStore | None = None,
+    store: ReasoningStore | None = None, require_proof: bool = True,
 ) -> list[Any]:
     """Restore verified gateway projections before normal history conversion.
 
@@ -652,6 +756,8 @@ def restore_native_projections(
         scope: Trusted managed client/account/resolved-model tuple, NOT request metadata.
         anthropic: True for Anthropic blocks, False for OpenAI message fields.
         store: Optional isolated replay store for tests; defaults to reasoning_store.
+        require_proof: False in gateway forwarding: missing projection receipts
+            use caller transcript data instead of rejecting the request.
 
     Returns:
         Messages in the same protocol/model representation. Each proven projection
@@ -682,7 +788,8 @@ def restore_native_projections(
                 previous = _plain_projection(restored[pending_results])
                 if any(previous[key] != raw[key] for key in previous.keys() & raw.keys()
                        if key not in ("role", "content")):
-                    raise NativeReasoningError("Combine adjacent tool results into one user message; their message metadata conflicts")
+                    if require_proof:
+                        raise NativeReasoningError("Combine adjacent tool results into one user message; their message metadata conflicts")
                 combined = {**previous, **raw, "content": previous["content"] + deepcopy(raw["content"])}
                 restored[pending_results] = (type(message).model_validate(combined)
                                              if hasattr(message, "model_validate") else combined)
@@ -696,13 +803,23 @@ def restore_native_projections(
         if not native:
             restored.append(message)
             continue
-        visible = content if anthropic else _openai_replay(raw)
-        found = replay_store.find_projection(scope, visible, anthropic=anthropic)
+        visible = content if anthropic else _openai_replay(raw, verify_text=require_proof)
+        try:
+            found = replay_store.find_projection(scope, visible, anthropic=anthropic)
+        except ReplayStorageError:
+            if require_proof:
+                raise
+            logger.warning("Native projection cache unavailable; using caller transcript")
+            found = None
         if found is None:
             if anthropic and any(block.get("type") in ("server_tool_use", "web_search_tool_result") for block in content):
-                raise NativeReasoningError("Native server-tool projection cannot be verified; keep unchanged history and its original account/model")
-            ordinary = _openai_projection(content) if anthropic else visible
-            replay_store.find(scope, ordinary["content"], ordinary["tool_calls"], native)
+                if require_proof:
+                    raise NativeReasoningError("Native server-tool projection cannot be verified; keep unchanged history and its original account/model")
+                restored.extend(native_history_as_transcript([message], anthropic=True))
+                continue
+            if require_proof:
+                ordinary = _openai_projection(content) if anthropic else visible
+                replay_store.find(scope, ordinary["content"], ordinary["tool_calls"], native)
             restored.append(message)
             continue
         record, receipt = found

@@ -63,7 +63,8 @@ class SessionRegistry:
                 entry = _SessionTurns(now + self.ttl, root or session)
                 self._sessions[key] = entry
             elif root is not None and root != entry.root_session:
-                raise ValueError("The root session cannot change within an existing session; use a new session ID")
+                entry = _SessionTurns(now + self.ttl, root)
+                self._sessions[key] = entry
             entry.expires_at = now + self.ttl
             self._sessions.move_to_end(key)
             turn_key = (explicit_turn, turn)

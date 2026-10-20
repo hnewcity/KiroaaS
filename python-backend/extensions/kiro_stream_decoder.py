@@ -881,6 +881,7 @@ def install_kiro_stream_decoder() -> None:
         state = ensure_request_state()
         merged_usage: Dict[str, Any] = {}
         ledger = NativeMessageLedger()
+        cacheable = True
         state.native_ledger = ledger
         state.response_model_id = None
         if len(args) >= 3:
@@ -899,7 +900,8 @@ def install_kiro_stream_decoder() -> None:
                     raise error
                 if event.type == "model_metadata" and event.resolved_model_id:
                     if ledger.has_native and state.response_model_id and state.response_model_id != event.resolved_model_id:
-                        raise NativeReasoningError("Upstream reported conflicting model IDs; native reasoning cannot be bound safely")
+                        logger.warning("Upstream changed response model metadata; skipping replay cache")
+                        cacheable = False
                     state.response_model_id = event.resolved_model_id
                 if event.type == "usage" and isinstance(event.usage, dict):
                     merged_usage.update(event.usage)
@@ -908,7 +910,7 @@ def install_kiro_stream_decoder() -> None:
                 if event.type == "native_reasoning":
                     event.native_index = index
                 yield event
-            if state.wire_identity is not None and state.account_scope and state.upstream_model_id:
+            if cacheable and state.wire_identity is not None and state.account_scope and state.upstream_model_id:
                 await asyncio.to_thread(reasoning_store.record,
                     (state.client_scope, state.account_scope, state.response_model_id or state.upstream_model_id),
                     state.wire_identity, state.input_turn_anchor, ledger,

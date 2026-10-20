@@ -148,6 +148,32 @@ def test_read_failure_is_not_reported_as_missing_history(tmp_path: Path) -> None
         storage.get("test", "record")
 
 
+def test_optional_lookup_and_write_survive_corrupt_cache(tmp_path: Path) -> None:
+    """Storage integrity remains checked, but it is no longer a request gate."""
+    storage = ReplayStorage(tmp_path)
+    storage.path.write_bytes(b"not-a-database")
+    store = ReasoningStore(storage=storage)
+    generated = ledger()
+    assert store.lookup(SCOPE, "answer", [], reasoning_blocks(generated.blocks)) is None
+    store.record(SCOPE, identity(), "anchor", generated)
+    assert store.lookup(SCOPE, "answer", [], reasoning_blocks(generated.blocks)) is not None
+
+
+def test_corrupt_cache_does_not_prevent_backend_startup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A broken optional replay file is left untouched while startup uses RAM."""
+    from kiro.native_reasoning import initialize_native_replay, shutdown_native_replay, reasoning_store
+
+    ReplayStorage(tmp_path).path.write_bytes(b"not-a-database")
+    monkeypatch.setenv("KIRO_NATIVE_REPLAY_DIR", str(tmp_path))
+    monkeypatch.setenv("KIRO_NATIVE_REPLAY_MODE", "persistent")
+    try:
+        initialize_native_replay(str(tmp_path / "state.json"))
+        assert reasoning_store.storage is None
+        assert (tmp_path / "history.sqlite3").read_bytes() == b"not-a-database"
+    finally:
+        shutdown_native_replay()
+
+
 def test_concurrent_initialization_uses_one_index_key(tmp_path: Path) -> None:
     """Parallel initializers agree on a single lookup key."""
     def initialize(index: int) -> str:

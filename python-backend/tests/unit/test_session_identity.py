@@ -140,13 +140,14 @@ def test_explicit_turn_identity_survives_registry_restart():
     assert first.continuation_id != SessionRegistry().resolve("b", "session", None, "client-turn", explicit_turn=True).continuation_id
 
 
-def test_child_root_is_inherited_and_cannot_silently_change():
+def test_child_root_is_inherited_and_explicit_change_resets_turns():
     registry = SessionRegistry()
     first = registry.resolve("a", "child", "parent", "t1")
     later = registry.resolve("a", "child", None, "t2")
     assert first.root_conversation_id == later.root_conversation_id
-    with pytest.raises(ValueError, match="root session cannot change"):
-        registry.resolve("a", "child", "unrelated", "t3")
+    changed = registry.resolve("a", "child", "unrelated", "t3")
+    assert changed.root_conversation_id != first.root_conversation_id
+    assert len(registry._sessions[("a", "child")].turns) == 1
 
 def test_same_gateway_key_has_same_namespace_across_api_auth_headers():
     anthropic = read_identity_headers([(b"x-api-key", b"fixture-key")])

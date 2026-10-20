@@ -218,6 +218,35 @@ def test_observer_budget_cannot_break_ordinary_unprojected_output(monkeypatch: p
         reset_request_state(token)
 
 
+@pytest.mark.parametrize("anthropic", [True, False])
+def test_decoder_boundary_discards_optional_receipt_without_failing_output(
+    anthropic: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import kiro.native_reasoning as native
+    from extensions.request_context import start_request_state, reset_request_state
+
+    store = ReasoningStore()
+    monkeypatch.setattr(native, "reasoning_store", store)
+    state, token = start_request_state()
+    try:
+        recorder = native.NativeProjectionRecorder(anthropic=anthropic)
+        for tool_id in ("first", "second"):
+            ledger = NativeMessageLedger()
+            ledger.feed(KiroEvent(type="tool_use", tool_use={
+                "id": tool_id, "name": "web_search", "input": {"query": tool_id},
+            }))
+            state.native_ledger = ledger
+            recorder.web_search(tool_id, "mcp-" + tool_id, tool_id, {"results": []}, tool_id)
+            if tool_id == "first":
+                assert recorder._exchanges
+        assert not recorder._observation_available
+        assert not recorder._exchanges
+        recorder.finish()
+        assert not store._records
+    finally:
+        reset_request_state(token)
+
+
 def test_coalescing_tool_results_preserves_caller_text_and_does_not_mutate_input() -> None:
     store, _, _, _, _, message = fixture_projection()
     caller = {"role": "user", "content": [{"type": "text", "text": "caller before"},

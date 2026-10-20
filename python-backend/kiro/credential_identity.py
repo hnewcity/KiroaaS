@@ -8,7 +8,8 @@ import threading
 from typing import Mapping
 from uuid import uuid4
 
-from kiro.native_replay_storage import current_storage
+from kiro.native_replay_storage import current_storage, ReplayStorageError
+from loguru import logger
 
 
 class CredentialIdentity:
@@ -88,11 +89,17 @@ class CredentialIdentity:
             if self._storage is None or not self._observed:
                 return self._key
             previous = self._replay_bindings.get(namespace)
-            binding = self._storage.bind_credentials(
-                namespace, {key: value.hex() for key, value in self._observed.items()},
-                {key: value.hex() for key, value in self._owned.items()},
-                expected=previous[0] if previous else None,
-                rotate=previous is not None and previous[1] != self._key,
-            )
+            try:
+                binding = self._storage.bind_credentials(
+                    namespace, {key: value.hex() for key, value in self._observed.items()},
+                    {key: value.hex() for key, value in self._owned.items()},
+                    expected=previous[0] if previous else None,
+                    rotate=previous is not None and previous[1] != self._key,
+                )
+            except ReplayStorageError:
+                logger.warning("Replay account cache unavailable; using request-local credential identity")
+                self._storage = None
+                self._replay_bindings.clear()
+                return self._key
             self._replay_bindings[namespace] = (binding, self._key)
             return binding

@@ -410,8 +410,7 @@ class TestAdditionalModelRequestFields:
         assert build_additional_model_request_fields("claude-sonnet-4.6", 8192) == {
             "output_config": {"effort": "low"}, "max_tokens": 8192,
         }
-        with pytest.raises(ValueError, match="never clamped"):
-            build_additional_model_request_fields("claude-sonnet-4.6", 200000)
+        assert build_additional_model_request_fields("claude-sonnet-4.6", 200000)["max_tokens"] == 200000
 
     def test_small_output_limit_not_silently_raised(self):
         assert build_additional_model_request_fields("claude-sonnet-4.6", 64)["max_tokens"] == 64
@@ -420,34 +419,30 @@ class TestAdditionalModelRequestFields:
         assert model_max_output_tokens("claude-opus-4.7") == 128000
         advertised_account_metadata._cache["claude-opus-4.7"] = _advertised_model("claude-opus-4.7", output_limit=2500)
         assert model_max_output_tokens("claude-opus-4.7") == 2500
-        with pytest.raises(ValueError):
-            build_additional_model_request_fields("claude-opus-4.7", 4096)
+        assert build_additional_model_request_fields("claude-opus-4.7", 4096)["max_tokens"] == 4096
 
     def test_effort_passthrough(self):
         for effort in ("none", "minimal", "medium", "xhigh"):
             assert build_additional_model_request_fields("claude-sonnet-4.6", 4096, {"effort": effort})["output_config"]["effort"] == effort
 
-    def test_known_unsupported_fields_are_errors_not_silently_omitted(self):
+    def test_unadvertised_fields_are_forwarded_without_silent_omission(self):
         assert build_additional_model_request_fields("claude-sonnet-4.5") is None
-        with pytest.raises(ValueError, match="unsupported"):
-            build_additional_model_request_fields("claude-sonnet-4.5", 8192)
+        assert build_additional_model_request_fields("claude-sonnet-4.5", 8192) == {"max_tokens": 8192}
 
     def test_unknown_metadata_not_guessed_from_name(self):
         assert build_additional_model_request_fields("claude-opus-100") is None
         assert model_max_output_tokens("claude-opus-100") is None
-        with pytest.raises(ValueError, match="unknown"):
-            build_additional_model_request_fields("claude-opus-100", 64)
+        assert build_additional_model_request_fields("claude-opus-100", 64) == {"max_tokens": 64}
 
     def test_reasoning_path_and_tokens_follow_metadata(self):
         assert build_additional_model_request_fields("gpt-5.6-sol", 4096, {"effort": "low"}) == {
             "reasoning": {"effort": "low"}, "max_tokens": 4096,
         }
 
-    def test_disabled_fields_reject_explicit_intent(self):
+    def test_disabled_automatic_fields_do_not_reject_explicit_intent(self):
         with patch("extensions.kiro_payload_builder.KIRO_ADDITIONAL_MODEL_FIELDS", False):
             assert build_additional_model_request_fields("claude-sonnet-4.6") is None
-            with pytest.raises(ValueError, match="disabled"):
-                build_additional_model_request_fields("claude-sonnet-4.6", 4096)
+            assert build_additional_model_request_fields("claude-sonnet-4.6", 4096)["max_tokens"] == 4096
 
     def test_placed_at_payload_top_level(self):
         payload = _payload([UnifiedMessage(role="user", content="Hi")], max_tokens=8192, output_config={"effort": "medium"})
@@ -456,8 +451,23 @@ class TestAdditionalModelRequestFields:
 
     def test_native_thinking_and_budget_are_not_discarded(self):
         assert build_additional_model_request_fields("claude-sonnet-4.6", 4096, native_thinking="enabled", thinking_budget=1024)["thinking"] == {"type": "enabled", "budget_tokens": 1024}
-        with pytest.raises(ValueError, match="disabled thinking"):
-            build_additional_model_request_fields("claude-sonnet-4.6", 4096, native_thinking="disabled", thinking_budget=1024)
+        assert build_additional_model_request_fields("claude-sonnet-4.6", 4096, native_thinking="disabled", thinking_budget=1024)["thinking"] == {"type": "disabled", "budget_tokens": 1024}
+
+    def test_malformed_metadata_and_structured_output_are_not_local_gates(self, advertised_account_metadata):
+        advertised_account_metadata._cache["claude-sonnet-4.6"] = {"tokenLimits": "bad metadata"}
+        format_spec = {"type": "json_schema", "schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}}}
+        fields = build_additional_model_request_fields("claude-sonnet-4.6", 100000, {"effort": "future-level", "format": format_spec}, native_thinking="disabled")
+        assert fields == {"max_tokens": 100000, "thinking": {"type": "disabled"}, "output_config": {"effort": "future-level", "format": format_spec}}
+
+    def test_thinking_display_option_survives_anthropic_adapter(self):
+        from kiro.models_anthropic import AnthropicMessagesRequest
+        from kiro.routes_anthropic import anthropic_to_kiro
+
+        thinking = {"type": "adaptive", "display": "omitted"}
+        req = AnthropicMessagesRequest(model="unknown-model", max_tokens=4096,
+            messages=[{"role": "user", "content": "hello"}], thinking=thinking)
+        result = anthropic_to_kiro(req, "fixture-conversation", "")
+        assert result["additionalModelRequestFields"]["thinking"] == thinking
 
 
 # ==================================================================================================

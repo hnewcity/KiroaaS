@@ -97,7 +97,7 @@ def setup_test_environment(tmp_path_factory):
     print(f"✅ Test credentials: {creds_file}")
     print(f"✅ Test state: {tmp_dir / 'state.json'}")
     
-    yield
+    yield {"credentials_file": str(creds_file), "state_file": str(tmp_dir / "state.json")}
     
     if original_replay_mode is None:
         os.environ.pop("KIRO_NATIVE_REPLAY_MODE", None)
@@ -531,12 +531,19 @@ def block_all_network_calls():
 # =============================================================================
 
 @pytest.fixture
-def clean_app():
+def clean_app(monkeypatch, setup_test_environment):
     """
     Returns a "clean" application instance for each test.
     """
     print("Importing application for test...")
-    from main import app
+    import main
+    # Configuration tests reload kiro.config, and other tests may import main
+    # during collection. Neither may replace the isolated fixture paths captured
+    # by the application's from-imports or recreate credentials from empty env.
+    monkeypatch.setattr(main, "ACCOUNTS_CONFIG_FILE", setup_test_environment["credentials_file"])
+    monkeypatch.setattr(main, "ACCOUNTS_STATE_FILE", setup_test_environment["state_file"])
+    monkeypatch.setattr(main, "ACCOUNT_SYSTEM", True)
+    app = main.app
     # Reset all dependency overrides before test
     app.dependency_overrides = {}
     return app

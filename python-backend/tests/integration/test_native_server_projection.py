@@ -90,6 +90,31 @@ def build(api: str, messages: list[dict[str, Any]], *, model: str = MODEL) -> di
     return openai.build_kiro_payload(request, "unused-route-fallback", "")
 
 
+def test_tool_free_transcript_retains_server_search_results_without_native_proof(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Evaluator context must keep search evidence even without projection replay."""
+    from kiro.models_anthropic import AnthropicMessagesRequest
+    from kiro.routes_anthropic import anthropic_to_kiro
+    from tests.unit.test_native_projection import fixture_projection
+
+    monkeypatch.setenv("KIRO_TOOLLESS_NATIVE_HISTORY", "transcript")
+    _, _, _, _, _, message = fixture_projection()
+    req = AnthropicMessagesRequest(model=MODEL, max_tokens=1024, tools=[], messages=[
+        {"role": "user", "content": "find evidence"}, message,
+        {"role": "user", "content": "evaluate the stopping condition"},
+    ])
+    original = deepcopy(req)
+    assert not reasoning_store._records
+    with context(scope=("evaluator-client", "evaluator-account", MODEL)) as state:
+        payload = anthropic_to_kiro(req, "evaluation", "")
+        assert state.recovered_reasoning_record is None
+    wire = json.dumps(payload)
+    for expected in ("before", "after", "summary", "https://example.invalid", "snippet", "query", "mcp-id"):
+        assert expected in wire
+    assert "reasoningContent" not in wire and "AP8B" not in wire and "signature" not in wire
+    assert req == original
+    assert not reasoning_store._records
+
+
 def frames(*, mixed: bool = True, error: bool = False) -> bytes:
     """Native content interleaves with two projected and one ordinary tool."""
     events = [

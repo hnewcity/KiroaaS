@@ -324,7 +324,8 @@ def convert_anthropic_messages(
             tool_calls=tool_calls if tool_calls else None,
             tool_results=tool_results if tool_results else None,
             images=images if images else None,
-            native_blocks=reasoning_blocks(content) if role == "assistant" else None,
+            native_blocks=([block.model_dump() if hasattr(block, "model_dump") else block for block in content]
+                           if role == "assistant" and reasoning_blocks(content) else None),
         )
         unified_messages.append(unified_msg)
 

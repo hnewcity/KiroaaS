@@ -615,13 +615,13 @@ def build_model_request_fields(
 def build_responses_request_fields(
     capabilities: ModelCapabilities, *, effort: str | None = None,
     thinking: ThinkingMode | None = None, max_tokens: int | None = None,
-    thinking_budget: int | None = None,
+    thinking_budget: int | None = None, apply_defaults: bool = True,
 ) -> dict[str, Any] | None:
     """Prepare semantic fields for the modeled global Responses operation.
 
     Its max_output_tokens and reasoning controls are not Generate's per-model
-    additional-field transport. Preserve explicit global fields; use model
-    limits/effort choices when advertised, but never invent defaults from a name.
+    additional-field transport. Preserve explicit global fields; use advertised
+    defaults without treating cached limits/effort choices as a forwarding gate.
     No Responses thinking-token budget mapping is established by the reference.
     """
     if thinking_budget is not None:
@@ -632,24 +632,49 @@ def build_responses_request_fields(
     if max_tokens is not None:
         if type(max_tokens) is not int or max_tokens <= 0:
             raise ModelCapabilityError(capabilities.model_id, "max_tokens", "Use a positive integer output limit.")
-        ceiling = capabilities.token_limits.max_output_tokens if capabilities.token_limits else None
-        if ceiling is not None and max_tokens > ceiling:
-            raise ModelCapabilityError(capabilities.model_id, "max_tokens", f"Requested limit exceeds advertised model output limit {ceiling}; no clamping is performed.")
         result["max_tokens"] = max_tokens
-    explicit_effort = effort is not None
     if thinking == "disabled":
         if effort is not None and effort != "none":
             raise ModelCapabilityError(capabilities.model_id, "effort", "Responses disabled thinking requires reasoning effort none; conflicting explicit effort cannot be ignored.")
         effort = "none"
-    elif effort is None and capabilities.effort.status is CapabilityStatus.SUPPORTED:
+    elif apply_defaults and effort is None and capabilities.effort.status is CapabilityStatus.SUPPORTED:
         effort = capabilities.effort.default
     if thinking in ("enabled", "adaptive") and (effort is None or effort == "none"):
-        raise ModelCapabilityError(capabilities.model_id, "thinking", "Set an advertised non-none effort to express enabled/adaptive thinking on Responses.")
+        raise ModelCapabilityError(capabilities.model_id, "thinking", "Set a non-none effort to express enabled/adaptive thinking on Responses.")
     if effort is not None:
         if not isinstance(effort, str) or not effort or effort != effort.strip():
             raise ModelCapabilityError(capabilities.model_id, "effort", "Use an exact nonempty effort string.")
-        disabling = effort == "none" and (thinking == "disabled" or "disabled" in capabilities.thinking.values)
-        if capabilities.effort.status is CapabilityStatus.SUPPORTED and not disabling and effort not in capabilities.effort.values:
-            raise ModelCapabilityError(capabilities.model_id, "effort", "Effort is not advertised for this model.")
         result["reasoning"] = {"effort": effort}
+    return result or None
+
+
+def forward_model_request_fields(
+    capabilities: ModelCapabilities, *, effort: str | None = None,
+    thinking: ThinkingMode | None = None, max_tokens: int | None = None,
+    thinking_budget: int | None = None, apply_defaults: bool = True,
+) -> dict[str, Any] | None:
+    """Serialize Generate controls without treating cached metadata as a gate.
+
+    Metadata supplies transport paths and optional defaults. Explicit caller
+    values are never clamped, downgraded or rejected for missing/stale capability
+    listings. JSON types remain validated; the upstream decides model support.
+    """
+    result: dict[str, Any] = {}
+    for name, value in (("max_tokens", max_tokens), ("budget_tokens", thinking_budget)):
+        if value is not None:
+            if type(value) is not int or value <= 0:
+                raise ModelCapabilityError(capabilities.model_id, name, "Use a positive integer output limit or budget.")
+            target = result.setdefault("thinking", {}) if name == "budget_tokens" else result
+            target[name] = value
+    if thinking is not None:
+        if thinking not in _THINKING_MODES:
+            raise ModelCapabilityError(capabilities.model_id, "thinking", "Use enabled, disabled or adaptive.")
+        result.setdefault("thinking", {})["type"] = thinking
+    if apply_defaults and effort is None and thinking != "disabled" and capabilities.effort.status is CapabilityStatus.SUPPORTED:
+        effort = capabilities.effort.default
+    if effort is not None:
+        if not isinstance(effort, str) or not effort or effort != effort.strip():
+            raise ModelCapabilityError(capabilities.model_id, "effort", "Use a nonempty effort string.")
+        path = capabilities.effort.path or ("output_config", "effort")
+        result[path[0]] = {path[1]: effort}
     return result or None

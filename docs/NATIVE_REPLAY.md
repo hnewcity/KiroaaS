@@ -1,79 +1,89 @@
-# Native reasoning history: long conversations and restart recovery
+# Native history and transparent forwarding
 
-## Behavior
+## Request behavior
 
-Native thinking is durable conversation evidence, not an hour-long bearer token.
-The gateway preserves its account/client/model and original-content checks, but no
-longer expires proof one hour after generation. It never drops thinking silently or
-accepts unknown client signatures merely because the local cache is empty.
+Local replay records are an optional reconstruction cache, not authorization to
+use a conversation. A missing record, restart, changed client/account/model,
+changed assistant text, or edited session root no longer produces a local
+`native_history_unavailable` rejection in the request path.
 
-By default, complete native responses and complete server-tool projection receipts
-are committed to `history.sqlite3`. The 512-record / 16 MiB memory cache
-is only an accelerator: cold misses recover the original record from disk. Both API
-surfaces and streaming/non-streaming paths share the same ledger. Incomplete or
-failed streams do not register completed proof. No automatic retention timer is set.
+When an exact scoped record exists, the gateway can recover original block order
+and an anonymous conversation identity. It never pulls another client's cached
+text into a request. Without a match, it forwards the history supplied by the
+caller; upstream validates the actual signatures and model support.
 
-This follows the CLI principle that persisted history, rather than process-local
-cache residency, is authoritative. It is deliberately not a byte-for-byte copy of
-the CLI: this gateway accepts external histories and reconstructs flattened or
-server-tool-adapted messages, so it must retain its extra provenance/isolation proof.
-It does not silently apply the CLI's model-switch reasoning stripping policy.
+Anthropic assistant blocks retain their supplied order. OpenAI history is flattened:
+without an original cached record, reconstruction uses thinking, text, then tool
+calls. This cannot recover interleaving that the client did not preserve. An
+upstream signature error is still possible; a local cache miss alone is not an error.
 
-## Storage and privacy
+If tool-pair repair changes an assistant turn, the repaired ordinary transcript
+is sent without attaching native reasoning to changed text/tool content. A missing
+server-tool projection receipt falls back to the visible transcript, retaining
+search results as text. Neither fallback invents signatures or new tool results.
 
-- `KIRO_NATIVE_REPLAY_MODE=persistent` (default); `memory` explicitly disables disk
-  retention, but restart and RAM eviction then lose proof.
-- `KIRO_NATIVE_REPLAY_DIR`: a private directory, defaulting to `native-replay` beside
-  `ACCOUNTS_STATE_FILE`. Tauri sets it to `native-replay` in the application's data
-  directory for both development and packaged runs.
-- `KIRO_NATIVE_REPLAY_MAX_BYTES=536870912`: stored-value budget (512 MiB). SQLite
-  page/journal overhead is additional. When full, the least recently used conversations
-  are evicted so new requests keep working; an evicted chat then returns
-  `native_history_unavailable`. A single entry larger than the budget stays in RAM only.
-  Account bindings are never evicted.
-- `history.sqlite3` is a plain SQLite file. It contains native thinking, original
-  response text, tool data and projection receipts: treat it as private conversation
-  history, like the credential files beside it. New files are created owner-only
-  (0700 directory, 0600 file); permissions are not enforced at startup. No raw
-  credentials are stored; credential continuity uses keyed digests.
-- Each row embeds its own kind and key, so corrupt or swapped rows fail closed
-  instead of being treated as missing history.
-- To erase all retained proof, stop every gateway process using the directory and
-  delete `history.sqlite3`. This invalidates its old chats.
-- Earlier builds wrote an encrypted `replay.sqlite3` plus `replay.key`. Those files are
-  ignored (a warning is logged) and can be deleted; their histories are not migrated.
+## Stop hooks and requests without tools
 
-## Account continuity
+The default `KIRO_TOOLLESS_NATIVE_HISTORY=transcript` handles Stop prompt hooks,
+summarization, and other requests whose `tools` list is absent or empty. It omits
+historical assistant thinking, signatures, and opaque reasoning before conversion,
+while preserving ordinary answers and rendering tool calls/results as text.
+Server-tool events retain their visible data. Reasoning-only turns receive an
+omission marker. User content and nested tool arguments are not filtered.
 
-The existing `credential_generation` remains process-local and guards in-flight
-requests against credential replacement. Replay uses a separate persistent opaque
-binding, recovered only when keyed credential-source snapshots match. The namespace
-(account ID/path) partitions the records but is not itself identity proof.
+This applies to all requests without tools, including ones that ask for thinking
+in their new response. Current-response thinking controls are independent. The
+historical value `strict` disables this transcript conversion; it no longer makes
+local cache proof mandatory. An invalid setting remains a configuration error.
 
-Gateway-owned successful refresh writes preserve continuity. External credential
-replacement changes the binding, and a stale manager cannot overwrite a newer
-binding created by another process. A refresh performed by another application may
-still count as external replacement: these are source-continuity checks, not verified
-provider principal IDs. Client credentials and normalized model must also match.
+No extra opt-in is needed after updating the backend. Existing deployments that
+explicitly set `strict` can remove that override or select `transcript`, then
+restart the backend. This does not modify client history files.
 
-## Upgrade limitations and diagnostics
+## Optional persistent cache
 
-There is no way to recover proof that the previous memory-only implementation has
-already expired, evicted or lost during restart. Such old histories still return
-`native_history_unavailable`; start a new chat and transfer necessary ordinary-text
-context once. Newly recorded histories are resumable under the rules above.
+- `KIRO_NATIVE_REPLAY_MODE=persistent` is the default; `memory` disables disk writes.
+- `KIRO_NATIVE_REPLAY_DIR` defaults to `native-replay` beside `ACCOUNTS_STATE_FILE`.
+  Tauri supplies the app data directory in development and packaged builds.
+- `KIRO_NATIVE_REPLAY_MAX_BYTES=536870912` is the stored-value budget. Least-recently
+  used evidence is evicted when full. SQLite overhead is additional.
+- `history.sqlite3` is plain SQLite containing response text, native blocks and
+  projection receipts. New files use owner-only creation permissions where supported.
+  Older encrypted `replay.sqlite3`/`replay.key` files are not migrated or read.
+- Cache startup/read/write errors are logged and degrade to memory or caller history.
+  A failed cache write does not turn a completed model response into an API failure.
+  Oversized individual cache entries are skipped. Corrupt files are not deleted.
+- Credential-continuity digests are cache indexes, not upstream identity proof.
+  An unavailable/stale disk binding falls back to process-local identity without
+  overwriting a newer binding. In-flight credential replacement still triggers a
+  retry before sending a payload prepared for a different credential snapshot.
 
-Unreadable/corrupt storage and changed cross-process
-account bindings produce actionable distinct storage messages. Storage errors never
-fall back to unverified replay. This removes the gateway's one-hour restriction; it
-does not override upstream context limits, upstream signature validity or account
-changes, and it does not certify native support for an untested live deployment.
+## Other local compatibility checks
+
+The forwarding adapters use model metadata for transport paths and optional
+defaults. Missing/malformed metadata, unlisted effort values and cached output
+limits no longer reject explicit Generate controls. Requested token counts are
+not clamped. Disabling automatic additional fields does not discard explicit
+client parameters. Upstream decides whether the selected model accepts them.
+
+`output_config.format` is preserved for Generate and mapped to `text.format` for
+Responses. JSON-schema formats receive the required default name `response` when
+no name was supplied. Responses output limits and effort values are forwarded
+without enforcing cached model limits/enums.
+Additional Generate thinking options such as `thinking.display` are preserved.
+Fields without a supported Responses mapping still produce a mapping error.
+
+JSON types, positive token counts, valid wire encodings, finite resource budgets,
+API authentication, HTTPS/Cloud routing, and protocol mappings are still checked.
+For example, Responses has no established thinking-token-budget mapping; the
+adapter reports that limitation instead of pretending the field was sent. Real
+upstream refusals, capacity limits and authentication failures remain visible.
 
 ## Offline validation
 
-Coverage includes long/overnight history, more than 512 original records, a fresh
-Python process reopening stored evidence, ordinary and projected histories across
-both APIs, normal refresh and source replacement, independent request generations,
-concurrent initialization, LRU eviction, corrupt/swapped rows, legacy files, explicit
-memory opt-out, and malformed configuration. No real accounts or upstream requests
-are used by these tests.
+Tests cover missing/changed scope, restart and cache corruption, streamed and
+non-streamed output through both API adapters, ordered Anthropic native blocks,
+OpenAI reconstruction, tool-free evaluator requests, server-tool results,
+credential continuity, edited session roots, stale/missing model metadata,
+structured output and unchanged caller data. These tests use synthetic streams
+and no live account credentials; they do not certify acceptance by every upstream.

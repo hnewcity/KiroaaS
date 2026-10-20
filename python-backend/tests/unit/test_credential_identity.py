@@ -98,8 +98,7 @@ def test_durable_external_replacement_and_aba_never_revive_scope(tmp_path, monke
 
 
 def test_other_process_revocation_cannot_be_undone_by_stale_manager(tmp_path, monkeypatch) -> None:
-    """An old manager must reload credentials, not overwrite a newer binding."""
-    import pytest
+    """An old cache binding falls back locally without overwriting the new one."""
     import kiro.native_replay_storage as persistence
     monkeypatch.setattr(persistence, "_storage", persistence.ReplayStorage(tmp_path))
     first = CredentialIdentity()
@@ -108,8 +107,8 @@ def test_other_process_revocation_cannot_be_undone_by_stale_manager(tmp_path, mo
     second = CredentialIdentity()
     second.observe("json", {"token": "B"})
     current = second.replay_binding("account")
-    with pytest.raises(persistence.ReplayStorageError, match="another process"):
-        first.replay_binding("account")
+    fallback = first.replay_binding("account")
+    assert fallback == first.binding_key and fallback != current
     assert second.replay_binding("account") == current
 
 

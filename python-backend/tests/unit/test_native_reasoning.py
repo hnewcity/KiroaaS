@@ -1,5 +1,6 @@
 """Bounded native state, data integrity, and account/model replay isolation."""
 
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -7,7 +8,7 @@ import pytest
 
 from kiro.native_reasoning import (
     NativeMessageLedger, NativeReasoningError, ReasoningStore,
-    normalize_delta, reasoning_blocks,
+    native_history_as_transcript, normalize_delta, reasoning_blocks,
 )
 from kiro.streaming_core import KiroEvent
 
@@ -90,8 +91,7 @@ def test_changed_assistant_content_or_tool_set_is_rejected():
 
 def test_oversized_record_is_not_retained():
     store = ReasoningStore(max_bytes=10)
-    with pytest.raises(NativeReasoningError, match="exceeds"):
-        store.record(("client", "account", "model"), identity(), "a", ledger())
+    store.record(("client", "account", "model"), identity(), "a", ledger())
     assert store._bytes == 0 and not store._records
 
 
@@ -105,3 +105,49 @@ def test_default_history_survives_long_conversations_and_overnight_idle() -> Non
     with patch("kiro.native_reasoning.time.monotonic", return_value=100 + 3 * 86400):
         found = store.find(scope, "answer", [], reasoning_blocks(generated.blocks))
     assert found.root_conversation_id == "root"
+
+
+@pytest.mark.parametrize("anthropic", [True, False])
+@pytest.mark.parametrize("modeled", [True, False])
+def test_transcript_omits_native_state_without_mutating_other_content(anthropic: bool, modeled: bool) -> None:
+    """Transcript opt-in removes only assistant native fields, not tool/user data."""
+    from kiro.models_anthropic import AnthropicMessage
+    from kiro.models_openai import ChatMessage
+
+    native = [{"type": "thinking", "thinking": "private", "signature": "sig"},
+              {"type": "redacted_thinking", "data": "b3BhcXVl"}]
+    nested = {"type": "thinking", "thinking": "tool argument must survive"}
+    assistant = {"role": "assistant", "content": [*native, {"type": "text", "text": "answer"},
+        {"type": "tool_use", "id": "call", "name": "inspect", "input": nested}]} if anthropic else {
+        "role": "assistant", "content": "answer", "reasoning_details": native, "reasoning_content": "private",
+        "tool_calls": [{"id": "call", "type": "function", "function": {
+            "name": "inspect", "arguments": '{"thinking":"tool argument must survive"}'}}],
+    }
+    messages = [{"role": "user", "content": "thinking is also an ordinary word"}, assistant]
+    if modeled:
+        cls = AnthropicMessage if anthropic else ChatMessage
+        messages = [cls.model_validate(message) for message in messages]
+    before = deepcopy(messages)
+    result = native_history_as_transcript(messages, anthropic=anthropic)
+    assert messages == before
+    assert result[0] is messages[0]
+    raw = result[1].model_dump() if modeled else result[1]
+    if anthropic:
+        assert [block["type"] for block in raw["content"]] == ["text", "tool_use"]
+        assert raw["content"][0]["text"] == "answer"
+        assert raw["content"][1]["input"] == nested
+    else:
+        assert raw["content"] == "answer"
+        assert raw["reasoning_details"] is None and raw["reasoning_content"] is None
+        assert raw["tool_calls"][0]["function"]["arguments"] == assistant["tool_calls"][0]["function"]["arguments"]
+
+
+def test_reasoning_only_transcript_marks_omission_and_leaves_plain_messages_alone() -> None:
+    """Even unrecognized opaque bytes are omitted, never promoted to valid proof."""
+    message = {"role": "assistant", "content": [{"type": "redacted_thinking", "data": "unknown"}]}
+    plain = {"role": "assistant", "content": "plain answer"}
+    result = native_history_as_transcript([message, plain], anthropic=True)
+    assert result[0]["content"] == [{"type": "text", "text": "[Assistant reasoning omitted from evaluation transcript.]"}]
+    assert result[1] is plain
+    openai = {"role": "assistant", "content": None, "reasoning_details": message["content"]}
+    assert native_history_as_transcript([openai], anthropic=False)[0]["content"] == result[0]["content"][0]["text"]

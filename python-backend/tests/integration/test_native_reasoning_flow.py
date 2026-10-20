@@ -1,6 +1,9 @@
 """Offline native-reasoning flow through installed decoder and both API adapters."""
 
 from contextlib import contextmanager
+from copy import deepcopy
+from pathlib import Path
+from typing import Any
 import json
 from types import SimpleNamespace
 
@@ -135,6 +138,74 @@ def assemble_openai(events):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("api", ["anthropic", "openai"])
 @pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("other_origin", [False, True])
+async def test_tool_free_evaluator_transcript_keeps_answers_and_tool_results(
+    api: str, streaming: bool, other_origin: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fresh chat can be evaluated without replaying its model-bound thinking."""
+    import kiro.streaming_anthropic as anthropic
+    import kiro.streaming_openai as openai
+
+    monkeypatch.delenv("KIRO_TOOLLESS_NATIVE_HISTORY", raising=False)
+    with context() as state:
+        build(api, request(api, [{"role": "user", "content": "go"}]))
+        upstream, _ = response()
+        if api == "anthropic":
+            if streaming:
+                chunks = [chunk async for chunk in anthropic.stream_kiro_to_anthropic(
+                    upstream, MODEL, state.model_cache, SimpleNamespace())]
+                message = assemble_anthropic(parse_sse(chunks))
+            else:
+                result = await anthropic.collect_anthropic_response(upstream, MODEL, state.model_cache, SimpleNamespace())
+                message = {"role": "assistant", "content": result["content"]}
+            tool_result = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call-1", "content": "file contents"}]}
+        else:
+            if streaming:
+                chunks = [chunk async for chunk in openai.stream_kiro_to_openai(
+                    None, upstream, MODEL, state.model_cache, SimpleNamespace())]
+                message = assemble_openai(parse_sse(chunks))
+            else:
+                result = await openai.collect_stream_response(None, upstream, MODEL, state.model_cache, SimpleNamespace())
+                message = result["choices"][0]["message"]
+            tool_result = {"role": "tool", "tool_call_id": "call-1", "content": "file contents"}
+    model = "fixture-evaluator" if other_origin else MODEL
+    account = "account-B" if other_origin else "account-A"
+    messages = [{"role": "user", "content": "go"}, message, tool_result,
+                {"role": "user", "content": "Is the stopping condition satisfied?"}]
+    req = request(api, messages, model=model).model_copy(update={"tools": [], "stream": streaming})
+    before = deepcopy(req)
+    # The compatible behavior is now the default, including changed evaluator origins.
+    records_before = deepcopy(reasoning_store._records)
+    with context(account=account, model=model) as state:
+        payload = build(api, req)
+        assert state.recovered_reasoning_record is None
+    assert req == before
+    assert reasoning_store._records == records_before
+    wire = json.dumps(payload, ensure_ascii=False)
+    for preserved in ("answer-1", "answer-2", "read_file", "file contents", "stopping condition"):
+        assert preserved in wire
+    for omitted in ("reasoningContent", "upstream-signature", "b3BhcXVl", "思考", "toolUses", "toolResults"):
+        assert omitted not in wire
+    assert not payload["conversationState"]["currentMessage"]["userInputMessage"].get("userInputMessageContext", {}).get("tools")
+    # A declared-tool request forwards supplied state; it cannot recover another account's session.
+    with context(account="other-account", model=model) as state:
+        native_payload = build(api, request(api, messages, model=model))
+        assert "reasoningContent" in json.dumps(native_payload)
+        assert state.recovered_reasoning_record is None
+
+
+@pytest.mark.parametrize("api", ["anthropic", "openai"])
+def test_unknown_tool_free_history_policy_is_not_silently_accepted(api: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A misspelled operator policy must not silently weaken or change replay."""
+    monkeypatch.setenv("KIRO_TOOLLESS_NATIVE_HISTORY", "transript")
+    with context():
+        with pytest.raises(ValueError, match="KIRO_TOOLLESS_NATIVE_HISTORY must be strict or transcript"):
+            build(api, request(api, [{"role": "user", "content": "hello"}]))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api", ["anthropic", "openai"])
+@pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("restart", [False, True])
 async def test_native_output_and_verified_tool_continuation_round_trip(api, streaming, restart, tmp_path, monkeypatch):
     import kiro.streaming_anthropic as anthropic
@@ -191,9 +262,11 @@ async def test_native_output_and_verified_tool_continuation_round_trip(api, stre
             {"reasoningText": {"text": "思考B", "signature": "upstream-signature-B"}},
         ]
         assert "_native_history" not in json.dumps(replay)
-    with context(account="account-B"):
-        with pytest.raises(NativeReasoningError, match="cannot be verified"):
-            build(api, request(api, first_messages + [message, tool_result]))
+    with context(account="account-B") as state:
+        other = build(api, request(api, first_messages + [message, tool_result]))
+        assert "upstream-signature-A" in json.dumps(other)
+        assert state.recovered_reasoning_record is None
+        assert other["conversationState"]["conversationId"] != first_payload["conversationState"]["conversationId"]
 
 @pytest.mark.asyncio
 async def test_explicit_stream_deadline_bounds_silent_body_and_closes_stream():
@@ -428,9 +501,79 @@ async def test_conflicting_model_hints_do_not_create_a_misbound_native_record():
     data += event_frame("reasoningContentEvent", {"text": "thought", "signature": "signature"})
     data += event_frame("assistantResponseEvent", {"modelId": "model-B", "content": "answer"})
     with context():
-        with pytest.raises(KiroStreamError, match="conflicting model IDs"):
-            _ = [event async for event in core.parse_kiro_stream(httpx.Response(200, stream=Chunks(data)))]
+        events = [event async for event in core.parse_kiro_stream(httpx.Response(200, stream=Chunks(data)))]
+        assert any(event.content == "answer" for event in events)
         assert not reasoning_store._records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api", ["anthropic", "openai"])
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_cache_write_error_does_not_fail_completed_response(api: str, streaming: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Both public response modes remain successful when optional persistence fails."""
+    from kiro.native_replay_storage import ReplayStorage, ReplayStorageError
+    import kiro.streaming_anthropic as anthropic
+    import kiro.streaming_openai as openai
+
+    storage = ReplayStorage(tmp_path)
+
+    def fail_write(*args: Any, **kwargs: Any) -> None:
+        raise ReplayStorageError("fixture disk failure")
+
+    monkeypatch.setattr(storage, "put", fail_write)
+    monkeypatch.setattr(reasoning_store, "storage", storage)
+    with context() as state:
+        build(api, request(api, [{"role": "user", "content": "go"}]))
+        upstream, _ = response()
+        if api == "anthropic":
+            if streaming:
+                result = [chunk async for chunk in anthropic.stream_kiro_to_anthropic(upstream, MODEL, state.model_cache, SimpleNamespace())]
+            else:
+                result = await anthropic.collect_anthropic_response(upstream, MODEL, state.model_cache, SimpleNamespace())
+        elif streaming:
+            result = [chunk async for chunk in openai.stream_kiro_to_openai(None, upstream, MODEL, state.model_cache, SimpleNamespace())]
+        else:
+            result = await openai.collect_stream_response(None, upstream, MODEL, state.model_cache, SimpleNamespace())
+        assert "answer-1" in json.dumps(result)
+        assert state.stream_error is None
+        assert reasoning_store._records
+
+
+@pytest.mark.parametrize("api", ["anthropic", "openai"])
+@pytest.mark.parametrize("tool_result_present", [False, True])
+def test_uncached_history_is_forwarded_without_minting_local_proof(api: str, tool_result_present: bool) -> None:
+    """Imported native history and repaired tool pairs do not require cache receipts."""
+    native = {"type": "thinking", "thinking": "imported thought", "signature": "external-signature"}
+    if api == "anthropic":
+        assistant = {"role": "assistant", "content": [
+            {"type": "text", "text": "before"}, native,
+            {"type": "tool_use", "id": "external-call", "name": "read_file", "input": {"path": "x"}},
+            {"type": "text", "text": "after"},
+        ]}
+        result = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "external-call", "content": "data"}]}
+    else:
+        assistant = {"role": "assistant", "content": "beforeafter", "reasoning_details": [native],
+                     "reasoning_content": "client display differs", "tool_calls": [{"id": "external-call", "type": "function",
+                     "function": {"name": "read_file", "arguments": '{"path":"x"}'}}]}
+        result = {"role": "tool", "tool_call_id": "external-call", "content": "data"}
+    messages = [{"role": "user", "content": "go"}, assistant]
+    if tool_result_present:
+        messages.append(result)
+    messages.append({"role": "user", "content": "continue"})
+    req = request(api, messages, model="not-in-metadata")
+    original = deepcopy(req)
+    with context() as state:
+        payload = build(api, req)
+        assert state.recovered_reasoning_record is None
+    assert req == original
+    assert not reasoning_store._records
+    wire = json.dumps(payload)
+    assert "before" in wire and "after" in wire
+    assert ("external-signature" in wire) is tool_result_present
+    if api == "anthropic" and tool_result_present:
+        entries = [entry["assistantResponseMessage"] for entry in payload["conversationState"]["history"]
+                   if "assistantResponseMessage" in entry]
+        assert [entry.get("content") for entry in entries[-4:]] == ["before", "", "", "after"]
 
 
 @pytest.mark.asyncio

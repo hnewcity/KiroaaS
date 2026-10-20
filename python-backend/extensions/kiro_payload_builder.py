@@ -2,9 +2,9 @@
 
 Installed by app_entry after tool aliases. Tools preserve schema semantics;
 mode/task type and conversation/turn identity are independent. Additional model
-fields use the selected account's advertised schema, never model-name heuristics,
-forced effort defaults, or silent token clamping. Missing metadata is unknown and
-explicit parameters fail actionably until verified metadata is available.
+fields use metadata for paths/defaults, never model-name heuristics or silent
+token clamping. Explicit client parameters are forwarded even when metadata is
+missing or stale; upstream decides support.
 
 Legacy textual thinking tags require KIRO_LEGACY_FAKE_REASONING=true and remain
 separate from native thinking fields. Native/system/transport choices are explicit
@@ -22,10 +22,14 @@ from loguru import logger
 
 from extensions.request_context import current_state
 from extensions.session_identity import SessionIdentity, request_identity
-from kiro.native_reasoning import NativeReasoningError, reasoning_blocks, reasoning_store, expand_history, tool_ids, restore_native_projections
+from kiro.native_reasoning import (
+    NativeReasoningError, reasoning_blocks, reasoning_store, expand_history,
+    tool_ids, restore_native_projections, native_history_as_transcript,
+    forward_native_history,
+)
 from extensions.tool_schema import normalize_tool_schema
 from extensions.protocol_runtime import configured_profile
-from extensions.model_capabilities import (CapabilityStatus, ModelCapabilities, ModelCapabilityError, build_model_request_fields, build_responses_request_fields)
+from extensions.model_capabilities import (CapabilityStatus, ModelCapabilities, ModelCapabilityError, forward_model_request_fields, build_responses_request_fields)
 
 import kiro.converters_core as _core
 from kiro.converters_core import (
@@ -147,7 +151,11 @@ def get_model_capabilities(model_id: str) -> ModelCapabilities:
                     ):
                         raw = item
                         break
-    return ModelCapabilities.from_model(raw, model_id=model_id)
+    try:
+        return ModelCapabilities.from_model(raw, model_id=model_id)
+    except ModelCapabilityError:
+        logger.warning("Ignoring malformed model capability metadata; forwarding explicit controls")
+        return ModelCapabilities.from_model(None, model_id=model_id)
 
 
 def model_has_native_reasoning(model_id: str) -> bool:
@@ -427,7 +435,9 @@ def _expand_native_history(history: List[Dict[str, Any]]) -> List[Dict[str, Any]
             continue
         expected = [tool for part in native for tool in part.get("assistantResponseMessage", {}).get("toolUses", [])]
         if tool_ids(assistant.get("toolUses")) != tool_ids(expected):
-            raise NativeReasoningError("Tool pairing repair changed signed native history; provide complete tool results")
+            logger.debug("Tool pairing changed native turn; forwarding repaired ordinary history")
+            result.append({"assistantResponseMessage": {key: value for key, value in assistant.items() if key != "_native_history"}})
+            continue
         result.extend(native)
     return result
 
@@ -443,17 +453,13 @@ def check_payload_size(payload: Dict[str, Any]) -> int:
 
 
 def _find_native_record(model_id: str, content: str, tools: Any, native: Any) -> Any:
-    """Resolve generated native state without trusting caller-provided model labels."""
+    """Look up optional scoped reconstruction, never authorization to forward."""
     if not native:
         return None
     state = current_state()
     if state is None or not state.account_scope:
-        raise NativeReasoningError("Native history requires a selected account and managed request context")
-    record = reasoning_store.find((state.client_scope, state.account_scope, model_id), content, tools, native)
-    identity = state.wire_identity
-    if record is not None and identity is not None and record.root_conversation_id != identity.root_conversation_id:
-        raise NativeReasoningError("Native reasoning belongs to a different root conversation; keep its original session")
-    return record
+        return None
+    return reasoning_store.lookup((state.client_scope, state.account_scope, model_id), content, tools, reasoning_blocks(native))
 
 
 def _prepare_native_history(request: Any, *, anthropic: bool) -> Any:
@@ -467,10 +473,19 @@ def _prepare_native_history(request: Any, *, anthropic: bool) -> Any:
         state.upstream_model_id = model_id
         state.recovered_reasoning_record = None
         state.wire_identity = None
+    history_mode = os.getenv("KIRO_TOOLLESS_NATIVE_HISTORY", "transcript").strip().lower()
+    if history_mode not in ("strict", "transcript"):
+        raise ValueError("KIRO_TOOLLESS_NATIVE_HISTORY must be strict or transcript")
+    if history_mode == "transcript" and not request.tools:
+        messages = native_history_as_transcript(request.messages, anthropic=anthropic)
+        if any(before is not after for before, after in zip(request.messages, messages)):
+            logger.info("Using tool-free evaluation transcript: native reasoning history omitted")
+        return request.model_copy(update={"messages": messages})
     if state is not None and state.account_scope:
-        restored = restore_native_projections(request.messages, scope=(state.client_scope, state.account_scope, model_id), anthropic=anthropic)
+        restored = restore_native_projections(request.messages, scope=(state.client_scope, state.account_scope, model_id), anthropic=anthropic, require_proof=False)
         request = request.model_copy(update={"messages": restored})
     found = []
+    native_count = 0
     for message in request.messages:
         if message.role != "assistant":
             continue
@@ -478,6 +493,7 @@ def _prepare_native_history(request: Any, *, anthropic: bool) -> Any:
         native = reasoning_blocks(blocks)
         if not native:
             continue
+        native_count += 1
         plain_content = [block.model_dump() if hasattr(block, "model_dump") else block for block in message.content] if isinstance(message.content, list) else message.content
         content = extract_text_content(plain_content)
         tool_calls = getattr(message, "tool_calls", None)
@@ -486,9 +502,8 @@ def _prepare_native_history(request: Any, *, anthropic: bool) -> Any:
         if record is not None:
             found.append(record)
     if found and state is not None:
-        if len({record.root_conversation_id for record in found}) != 1:
-            raise NativeReasoningError("Native history contains unrelated root conversations")
-        state.recovered_reasoning_record = found[-1]
+        if len(found) == native_count and len({record.root_conversation_id for record in found}) == 1:
+            state.recovered_reasoning_record = found[-1]
     return request
 
 
@@ -636,14 +651,16 @@ def build_kiro_history(messages: List[UnifiedMessage], model_id: str) -> List[Di
             tool_uses = _core.extract_tool_uses_from_message(msg.content, msg.tool_calls)
             
             record = _find_native_record(model_id, content, tool_uses, msg.native_blocks)
+            native_history = (expand_history(record, tool_uses) if record is not None
+                              else forward_native_history(content, tool_uses, msg.native_blocks))
             # Unsigned empty turns keep the legacy fallback; native reasoning entries
             # explicitly allow empty content, as in the shipped CLI expansion.
-            if not content.strip() and record is None:
+            if not content.strip() and not native_history:
                 content = " " if tool_uses else EMPTY_CONTENT_FALLBACK
             
             assistant_response = {"content": content}
-            if record is not None:
-                assistant_response["_native_history"] = expand_history(record, tool_uses)
+            if native_history:
+                assistant_response["_native_history"] = native_history
             if tool_uses:
                 assistant_response["toolUses"] = tool_uses
             
@@ -690,8 +707,8 @@ def _extract_effort(output_config: Any) -> Optional[str]:
         return None
     if hasattr(output_config, "model_dump"):
         output_config = output_config.model_dump(exclude_none=True)
-    if not isinstance(output_config, dict) or set(output_config) - {"effort"}:
-        raise ValueError("output_config currently accepts only effort; unsupported fields cannot be discarded")
+    if not isinstance(output_config, dict):
+        raise ValueError("output_config must be an object")
     if "effort" not in output_config:
         return None
     effort = output_config["effort"]
@@ -703,29 +720,34 @@ def _extract_effort(output_config: Any) -> Optional[str]:
 def build_additional_model_request_fields(
     model_id: str, max_tokens: Optional[int] = None, output_config: Optional[Any] = None,
     *, native_thinking: Optional[str] = None, thinking_budget: Optional[int] = None,
+    thinking_options: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Validate and serialize exact caller intent against account model metadata.
-
-    Unknown schemas are not inferred from the model ID. Native thinking budgets
-    are validated when advertised. Explicit legacy textual thinking is the sole
-    opt-in alternative, not an automatic fallback when the server rejects a field.
-    """
+    """Serialize explicit caller controls; metadata is advisory, not a gate."""
     effort = _extract_effort(output_config)
     if not KIRO_ADDITIONAL_MODEL_FIELDS:
         if any(value is not None for value in (max_tokens, effort, native_thinking, thinking_budget)):
-            raise ValueError("Additional model fields are disabled; enable KIRO_ADDITIONAL_MODEL_FIELDS to honor explicit generation parameters")
-        return None
+            logger.debug("Explicit generation parameters override disabled automatic additional fields")
+        elif not output_config:
+            return None
     capability = get_model_capabilities(model_id)
-    if configured_profile().generation_protocol == "responses":
-        return build_responses_request_fields(capability, effort=effort, thinking=native_thinking, max_tokens=max_tokens, thinking_budget=thinking_budget)
+    responses = configured_profile().generation_protocol == "responses"
     if _fake_reasoning_enabled() and capability.thinking.status is not CapabilityStatus.SUPPORTED:
         # This deployment explicitly selected legacy text controls. No automatic
         # native-to-text fallback is performed in the default configuration.
         native_thinking, thinking_budget = None, None
-    return build_model_request_fields(
+    serializer = build_responses_request_fields if responses else forward_model_request_fields
+    fields = serializer(
         capability, effort=effort, thinking=native_thinking,
-        max_tokens=max_tokens, thinking_budget=thinking_budget,
-    )
+        max_tokens=max_tokens, thinking_budget=thinking_budget, apply_defaults=KIRO_ADDITIONAL_MODEL_FIELDS,
+    ) or {}
+    config = output_config.model_dump(exclude_none=True) if hasattr(output_config, "model_dump") else output_config
+    extras = {key: value for key, value in (config or {}).items() if key != "effort"}
+    if extras:
+        fields.setdefault("output_config", {}).update(extras)
+    thinking_extras = {key: value for key, value in (thinking_options or {}).items() if key not in ("type", "budget_tokens")}
+    if thinking_extras:
+        fields.setdefault("thinking", {}).update(thinking_extras)
+    return fields or None
 
 
 def build_placeholder_tool_specs(
@@ -818,6 +840,7 @@ def build_kiro_payload(
     identity: Optional[SessionIdentity] = None,
     native_thinking: Optional[str] = None,
     thinking_budget: Optional[int] = None,
+    thinking_options: Optional[Dict[str, Any]] = None,
 ) -> KiroPayloadResult:
     """
     Builds complete payload for Kiro API from unified data.
@@ -831,7 +854,7 @@ def build_kiro_payload(
     - history[2..]: conversation turns (trailing assistant prefill dropped)
     - currentMessage: last user turn with tools (+ placeholders) and toolResults
     - conversationState.agentTaskType / agentContinuationId envelope fields
-    - top-level additionalModelRequestFields (gated by KIRO_ADDITIONAL_MODEL_FIELDS)
+    - top-level additionalModelRequestFields (automatic defaults are configurable)
     
     Args:
         messages: List of messages in unified format (without system messages)
@@ -842,7 +865,11 @@ def build_kiro_payload(
         profile_arn: AWS CodeWhisperer profile ARN
         thinking_config: Thinking configuration from API adapter
         max_tokens: Client max output tokens (for additionalModelRequestFields), optional
-        output_config: Client output_config ({"effort": ...}), optional
+        output_config: Client output controls including effort and format, optional
+        identity: Resolved conversation/turn identity, optional
+        native_thinking: Explicit native thinking mode, optional
+        thinking_budget: Explicit native thinking token budget, optional
+        thinking_options: Original thinking options to preserve additional fields
     
     Returns:
         KiroPayloadResult with payload and tool documentation
@@ -1017,7 +1044,7 @@ def build_kiro_payload(
     # Model-specific request fields (top level, next to conversationState)
     additional_fields = build_additional_model_request_fields(
         model_id, max_tokens, output_config,
-        native_thinking=native_thinking, thinking_budget=thinking_budget,
+        native_thinking=native_thinking, thinking_budget=thinking_budget, thinking_options=thinking_options,
     )
     if additional_fields:
         payload["additionalModelRequestFields"] = additional_fields
@@ -1194,7 +1221,7 @@ def install_kiro_payload_builder() -> None:
 
     def build_kiro_payload_from_adapter(**kwargs):
         options = extras.get() or {}
-        for name in ("max_tokens", "output_config", "identity", "native_thinking", "thinking_budget"):
+        for name in ("max_tokens", "output_config", "identity", "native_thinking", "thinking_budget", "thinking_options"):
             kwargs.setdefault(name, options.get(name))
         return build_kiro_payload(**kwargs)
 
@@ -1204,8 +1231,8 @@ def install_kiro_payload_builder() -> None:
         identity = request_identity(conversation_id, explicit_session, request.messages, fallback_account=profile_arn)
         thinking = request.thinking
         if thinking is not None:
-            if not isinstance(thinking, dict) or set(thinking) - {"type", "budget_tokens"}:
-                raise ValueError("thinking accepts type and budget_tokens; unsupported fields cannot be discarded")
+            if not isinstance(thinking, dict):
+                raise ValueError("thinking must be an object")
             if thinking.get("type") not in ("enabled", "disabled", "adaptive"):
                 raise ValueError("thinking.type must be enabled, disabled, or adaptive")
             if "budget_tokens" in thinking and (type(thinking["budget_tokens"]) is not int or thinking["budget_tokens"] <= 0):
@@ -1213,6 +1240,7 @@ def install_kiro_payload_builder() -> None:
         token = extras.set({
             "native_thinking": thinking.get("type") if thinking is not None else None,
             "thinking_budget": thinking.get("budget_tokens") if thinking is not None else None,
+            "thinking_options": thinking,
             "max_tokens": request.max_tokens,
             "output_config": getattr(request, "output_config", None),
             "identity": identity,
