@@ -19,6 +19,9 @@ interface UsageBreakdown {
   displayName?: string;
   overageRate?: number;
   currentOverages?: number;
+  currentOveragesWithPrecision?: number;
+  overageCap?: number;
+  overageCapWithPrecision?: number;
   resourceType?: string;
   resetDate?: string;
   freeTrialInfo?: {
@@ -151,6 +154,18 @@ export function UsageCard({ host, port, apiKey, isRunning }: UsageCardProps) {
   const totalLimit = trialLimit + freeLimit + bonusLimit;
   const totalUsed = trialUsed + freeUsed + bonusUsed;
   const pct = totalLimit > 0 ? Math.min(100, Math.round((totalUsed / totalLimit) * 100)) : 0;
+
+  // Overage caps are additional credits, separate from the included quota.
+  const overageStatus = usage?.overageConfiguration?.overageStatus;
+  const overageCap = breakdown?.overageCapWithPrecision ?? breakdown?.overageCap;
+  const overageUsed = breakdown?.currentOveragesWithPrecision ?? breakdown?.currentOverages;
+  const hasOverageCap = overageCap !== undefined && Number.isFinite(overageCap) && overageCap >= 0;
+  const hasOverageUsed = overageUsed !== undefined && Number.isFinite(overageUsed) && overageUsed >= 0;
+  const remainingOverage = overageStatus === 'DISABLED'
+    ? 0
+    : overageStatus === 'ENABLED' && hasOverageCap && hasOverageUsed
+      ? Math.max(0, overageCap - overageUsed)
+      : null;
 
   const plan = usage?.subscriptionInfo?.subscriptionTitle;
   const email = usage?.userInfo?.email;
@@ -346,7 +361,7 @@ export function UsageCard({ host, port, apiKey, isRunning }: UsageCardProps) {
             )}
 
             {/* Quota breakdown grid */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid auto-rows-fr grid-cols-2 md:grid-cols-4 gap-3">
               {[
                 trialLimit > 0 && (
                   <QuotaTile
@@ -381,12 +396,23 @@ export function UsageCard({ host, port, apiKey, isRunning }: UsageCardProps) {
                   value={fmtNum(Math.max(0, totalLimit - totalUsed))}
                   tone="black"
                 />,
+                <QuotaTile
+                  key="overage"
+                  label={t('usageOverageRemaining')}
+                  value={remainingOverage === null ? '--' : fmtNum(remainingOverage)}
+                  description={overageStatus === 'DISABLED'
+                    ? t('usageOverageOff')
+                    : overageStatus !== 'ENABLED'
+                      ? t('usageOverageUnknown')
+                      : `${t('usageOverageUsed')} ${hasOverageUsed ? fmtNum(overageUsed) : '--'} / ${t('usageOverageLimit')} ${hasOverageCap ? fmtNum(overageCap) : '--'}`}
+                  tone="stone"
+                />,
               ]
                 .filter(Boolean)
                 .map((tile, i) => (
                   <div
                     key={(tile as { key?: string }).key ?? i}
-                    className={`transition-all ease-out ${
+                    className={`min-w-0 transition-all ease-out ${
                       expanded ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-1'
                     }`}
                     style={{
@@ -410,12 +436,14 @@ function QuotaTile({
   used,
   limit,
   value,
+  description,
   tone,
 }: {
   label: string;
   used?: number;
   limit?: number;
   value?: string;
+  description?: string;
   tone: 'blue' | 'stone' | 'green' | 'black';
 }) {
   const toneMap = {
@@ -434,19 +462,15 @@ function QuotaTile({
   const fmt = (n?: number) => (n ?? 0).toLocaleString();
 
   return (
-    <div className={`rounded-2xl border px-4 py-3 ${toneMap[tone]}`}>
+    <div className={`h-full min-w-0 rounded-2xl border px-4 py-3 break-words ${toneMap[tone]}`}>
       <p className={`text-[10px] font-bold uppercase tracking-wider ${subToneMap[tone]}`}>
         {label}
       </p>
-      {value !== undefined ? (
-        <p className="text-xl font-bold mt-1">{value}</p>
-      ) : (
-        <>
-          <p className="text-xl font-bold mt-1">{fmt(limit)}</p>
-          <p className={`text-[11px] mt-0.5 ${subToneMap[tone]}`}>
-            {fmt(used)} / {fmt(limit)}
-          </p>
-        </>
+      <p className="text-xl font-bold mt-1">{value ?? fmt(limit)}</p>
+      {(description !== undefined || value === undefined) && (
+        <p className={`text-[11px] mt-0.5 ${subToneMap[tone]}`}>
+          {description ?? `${fmt(used)} / ${fmt(limit)}`}
+        </p>
       )}
     </div>
   );
