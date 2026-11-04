@@ -32,7 +32,7 @@ htmlcov/
 
 # Tauri / Rust
 src-tauri/target/
-src-tauri/Cargo.lock
+/release-assets/
 
 # Node / NPM
 node_modules/
