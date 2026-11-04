@@ -84,6 +84,37 @@ REGISTRATION_FIELDS = {"client_id": "_client_id", "client_secret": "_client_secr
 ENTERPRISE_REGISTRATION_FIELDS = {"clientId": "_client_id", "clientSecret": "_client_secret"}
 
 
+class CredentialFileFormatError(ValueError):
+    """A credential document cannot unambiguously identify one account."""
+
+
+def select_json_credentials(document: object) -> dict[str, object]:
+    """Select an account object without discarding its enclosing document.
+
+    Args:
+        document: Parsed JSON credentials, optionally a single-account export array.
+
+    Returns:
+        The original account dictionary, so updates preserve the document shape.
+
+    Raises:
+        CredentialFileFormatError: If the document is malformed or has multiple accounts.
+    """
+    if isinstance(document, list):
+        if len(document) != 1:
+            raise CredentialFileFormatError(
+                "A credentials JSON file must contain exactly one account. "
+                "Export each account to a separate file and reference those files "
+                "with type=json and path in the account configuration."
+            )
+        document = document[0]
+    if not isinstance(document, dict):
+        raise CredentialFileFormatError(
+            "Credentials must be a JSON object or an array containing one account object."
+        )
+    return document
+
+
 class AuthType(Enum):
     """
     Type of authentication mechanism.
@@ -472,7 +503,7 @@ class KiroAuthManager:
     
     def _load_credentials_from_file(self, file_path: str) -> None:
         """
-        Loads credentials from a JSON file.
+        Loads credentials from a JSON object or a single-account export array.
         
         Supported JSON fields (Kiro Desktop):
         - refreshToken: Refresh token
@@ -500,7 +531,7 @@ class KiroAuthManager:
                 return
             
             with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+                data = select_json_credentials(json.load(f))
             
             self._observe_credential_source("json", data, JSON_CREDENTIAL_FIELDS)
 
@@ -543,6 +574,8 @@ class KiroAuthManager:
             
             logger.info(f"Credentials loaded from {file_path}")
             
+        except CredentialFileFormatError:
+            raise
         except Exception as e:
             logger.error(f"Error loading credentials from file: {e}")
         finally:
@@ -595,10 +628,11 @@ class KiroAuthManager:
             path = Path(self._creds_file).expanduser()
             
             # Read existing data
-            existing_data = {}
+            document = {}
             if path.exists():
                 with open(path, 'r', encoding='utf-8') as f:
-                    existing_data = json.load(f)
+                    document = json.load(f)
+            existing_data = select_json_credentials(document)
             
             # Update data
             existing_data['accessToken'] = self._access_token
@@ -610,7 +644,7 @@ class KiroAuthManager:
             
             # Save
             with open(path, 'w', encoding='utf-8') as f:
-                json.dump(existing_data, f, indent=2, ensure_ascii=False)
+                json.dump(document, f, indent=2, ensure_ascii=False)
             
             self._credential_identity.record_write(
                 "json", self._credential_source_material(existing_data, JSON_CREDENTIAL_FIELDS)

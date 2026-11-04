@@ -89,6 +89,48 @@ class TestAccountManagerLoadCredentials:
     """
     Tests for AccountManager.load_credentials() method.
     """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("fields", [{}, {"type": "json"}, {"type": "refresh_token"}])
+    async def test_invalid_config_does_not_log_exported_secrets(
+        self, tmp_path: Path, fields: dict[str, str],
+    ) -> None:
+        """A misplaced account export must produce guidance without printing credentials."""
+        config = tmp_path / "credentials.json"
+        entry = dict(fields, refreshToken="fake-private-refresh", clientSecret="fake-private-secret")
+        config.write_text(json.dumps([entry]), encoding="utf-8")
+        manager = AccountManager(str(config), str(tmp_path / "state.json"))
+
+        with patch("kiro.account_manager.logger") as log:
+            await manager.load_credentials()
+
+        assert not manager._accounts
+        assert log.warning.called
+        assert "fake-private" not in str(log.mock_calls)
+
+    @pytest.mark.asyncio
+    async def test_folder_scanning_accepts_single_account_exports(self, tmp_path: Path) -> None:
+        """Discover objects and singleton exports, skipping malformed and multi-account files."""
+        folder = tmp_path / "accounts"
+        folder.mkdir()
+        payloads = {
+            "object.json": {"refreshToken": "fake-object-token"},
+            "export.json": [{"refreshToken": "fake-array-token", "clientId": "fake-client"}],
+            "multiple.json": [{"refreshToken": "fake-first"}, {"refreshToken": "fake-second"}],
+            "empty.json": [],
+            "scalar.json": ["fake-token"],
+        }
+        for name, payload in payloads.items():
+            (folder / name).write_text(json.dumps(payload), encoding="utf-8")
+        config = tmp_path / "credentials.json"
+        config.write_text(json.dumps([{"type": "json", "path": str(folder)}]), encoding="utf-8")
+        manager = AccountManager(str(config), str(tmp_path / "state.json"))
+
+        await manager.load_credentials()
+
+        assert set(manager._accounts) == {
+            str((folder / "object.json").resolve()), str((folder / "export.json").resolve()),
+        }
     
     @pytest.mark.asyncio
     async def test_load_credentials_json_type(self, tmp_path):

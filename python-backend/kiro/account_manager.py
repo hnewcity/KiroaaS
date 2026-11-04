@@ -45,7 +45,7 @@ from typing import Dict, List, Optional
 import httpx
 from loguru import logger
 
-from kiro.auth import KiroAuthManager, AuthType
+from kiro.auth import KiroAuthManager, AuthType, select_json_credentials
 from kiro.cache import ModelInfoCache
 from kiro.model_resolver import ModelResolver, normalize_model_name
 from kiro.config import (
@@ -244,17 +244,17 @@ class AccountManager:
             
             # Validate required fields based on type
             if not cred_type:
-                logger.warning(f"Invalid credential entry (missing type): {entry}")
+                logger.warning("Invalid credential entry: missing type. Use type=json and path to reference a credentials file.")
                 continue
             
             # For json/sqlite types, path is required
             if cred_type in ("json", "sqlite") and not path:
-                logger.warning(f"Invalid credential entry (type={cred_type} requires path): {entry}")
+                logger.warning(f"Invalid credential entry: type={cred_type} requires path.")
                 continue
             
             # For refresh_token type, refresh_token field is required
             if cred_type == "refresh_token" and not entry.get("refresh_token"):
-                logger.warning(f"Invalid credential entry (type=refresh_token requires refresh_token field): {entry}")
+                logger.warning("Invalid credential entry: type=refresh_token requires refresh_token field.")
                 continue
             
             # Handle refresh_token type (no path processing needed)
@@ -283,7 +283,7 @@ class AccountManager:
                     if cred_type == "json":
                         try:
                             with open(file_path, 'r', encoding='utf-8') as f:
-                                data = json.load(f)
+                                data = select_json_credentials(json.load(f))
                                 # Valid if has refreshToken or clientId
                                 if 'refreshToken' in data or 'clientId' in data:
                                     is_valid = True

@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 import httpx
 
-from kiro.auth import KiroAuthManager, AuthType
+from kiro.auth import KiroAuthManager, AuthType, CredentialFileFormatError
 from kiro.config import TOKEN_REFRESH_THRESHOLD, get_aws_sso_oidc_url
 
 
@@ -123,6 +123,147 @@ class TestKiroAuthManagerCredentialsFile:
         print("Verification: Fallback refresh_token is used...")
         print(f"Comparing refresh_token: Expected 'fallback_token', Got '{manager._refresh_token}'")
         assert manager._refresh_token == "fallback_token"
+
+
+class TestJsonCredentialExports:
+    """Exercise exported credentials through loading, refresh, and write-back."""
+
+    @pytest.fixture
+    def exported_account(self) -> dict[str, object]:
+        """Match an IdC export using synthetic tokens and no expiry timestamp."""
+        return {
+            "refreshToken": "fake-export-refresh",
+            "accessToken": "fake-export-access",
+            "clientId": "fake-export-client",
+            "clientSecret": "fake-export-secret",
+            "authMethod": "IdC",
+            "provider": "BuilderId",
+            "region": "us-east-1",
+            "authRegion": "us-east-1",
+            "apiRegion": "us-east-1",
+            "email": "[test@example.invalid](mailto:test@example.invalid)",
+        }
+
+    @pytest.mark.parametrize("wrapped", [False, True])
+    @pytest.mark.parametrize("oidc", [False, True])
+    def test_export_loads_credentials_and_selects_auth_type(
+        self, tmp_path: Path, exported_account: dict[str, object], wrapped: bool, oidc: bool,
+    ) -> None:
+        """Objects and singleton arrays must select the same authentication flow."""
+        if not oidc:
+            del exported_account["clientId"]
+            del exported_account["clientSecret"]
+        path = tmp_path / "export.json"
+        path.write_text(json.dumps([exported_account] if wrapped else exported_account), encoding="utf-8")
+
+        manager = KiroAuthManager(creds_file=str(path))
+
+        assert manager._refresh_token == exported_account["refreshToken"]
+        assert manager._access_token == exported_account["accessToken"]
+        assert manager._client_id == exported_account.get("clientId")
+        assert manager._client_secret == exported_account.get("clientSecret")
+        assert manager.auth_type == (AuthType.AWS_SSO_OIDC if oidc else AuthType.KIRO_DESKTOP)
+        assert manager.is_token_expiring_soon()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("wrapped", [False, True])
+    async def test_export_refresh_preserves_shape_metadata_and_identity(
+        self, tmp_path: Path, exported_account: dict[str, object], wrapped: bool,
+    ) -> None:
+        """Refresh uses OIDC and persists rotated tokens without flattening exports."""
+        path = tmp_path / "export.json"
+        path.write_text(json.dumps([exported_account] if wrapped else exported_account), encoding="utf-8")
+        manager = KiroAuthManager(creds_file=str(path))
+        before = manager.credential_generation
+        url = get_aws_sso_oidc_url("us-east-1")
+        response = httpx.Response(200, request=httpx.Request("POST", url), json={
+            "accessToken": "fake-rotated-access", "refreshToken": "fake-rotated-refresh", "expiresIn": 3600,
+        })
+
+        with patch("kiro.auth.httpx.AsyncClient") as client_factory:
+            post = client_factory.return_value.__aenter__.return_value.post
+            post.return_value = response
+            assert await manager.get_access_token() == "fake-rotated-access"
+            assert post.await_count == 1
+            assert post.call_args.args[0] == url
+            assert post.call_args.kwargs["json"] == {
+                "grantType": "refresh_token", "refreshToken": exported_account["refreshToken"],
+                "clientId": exported_account["clientId"], "clientSecret": exported_account["clientSecret"],
+            }
+
+        document = json.loads(path.read_text(encoding="utf-8"))
+        assert isinstance(document, list) is wrapped
+        saved = document[0] if wrapped else document
+        assert saved["accessToken"] == "fake-rotated-access"
+        assert saved["refreshToken"] == "fake-rotated-refresh"
+        assert "expiresAt" in saved
+        for key, value in exported_account.items():
+            if key not in ("accessToken", "refreshToken"):
+                assert saved[key] == value
+        manager._load_credentials_from_file(str(path))
+        assert manager.credential_generation == before
+        assert await manager.get_access_token() == "fake-rotated-access"
+        assert KiroAuthManager(creds_file=str(path))._refresh_token == "fake-rotated-refresh"
+
+    @pytest.mark.parametrize("document", [
+        [], [{"refreshToken": "fake-secret-a"}, {"refreshToken": "fake-secret-b"}],
+        [None], ["fake-secret"], [[{"refreshToken": "fake-secret"}]],
+        None, "fake-secret", 42, True,
+    ])
+    def test_invalid_export_has_actionable_secret_free_error(
+        self, tmp_path: Path, document: object,
+    ) -> None:
+        """Reject ambiguous or malformed roots without selecting or logging an account."""
+        path = tmp_path / "invalid.json"
+        original = json.dumps(document)
+        path.write_text(original, encoding="utf-8")
+
+        with pytest.raises(CredentialFileFormatError, match="account") as error:
+            KiroAuthManager(creds_file=str(path))
+
+        assert "fake-secret" not in str(error.value)
+        assert path.read_text(encoding="utf-8") == original
+
+    def test_export_replacement_updates_credential_identity(
+        self, tmp_path: Path, exported_account: dict[str, object],
+    ) -> None:
+        """Array wrappers are formatting; changed credentials must invalidate continuity."""
+        path = tmp_path / "export.json"
+        path.write_text(json.dumps(exported_account), encoding="utf-8")
+        manager = KiroAuthManager(creds_file=str(path))
+        before = manager.credential_generation
+        path.write_text(json.dumps([exported_account]), encoding="utf-8")
+        manager._load_credentials_from_file(str(path))
+        assert manager.credential_generation == before
+
+        exported_account["refreshToken"] = "fake-replacement-refresh"
+        path.write_text(json.dumps([exported_account]), encoding="utf-8")
+        manager._load_credentials_from_file(str(path))
+        assert manager.credential_generation != before
+        assert manager._refresh_token == "fake-replacement-refresh"
+
+    @pytest.mark.asyncio
+    async def test_export_becoming_ambiguous_during_refresh_is_not_overwritten(
+        self, tmp_path: Path, exported_account: dict[str, object],
+    ) -> None:
+        """An in-flight refresh must never overwrite a newly added second account."""
+        path = tmp_path / "export.json"
+        path.write_text(json.dumps([exported_account]), encoding="utf-8")
+        manager = KiroAuthManager(creds_file=str(path))
+        replacement = json.dumps([exported_account, {"refreshToken": "fake-second-account"}])
+
+        async def replace_during_refresh(*args: object, **kwargs: object) -> httpx.Response:
+            """Simulate an external edit before the refresh response arrives."""
+            path.write_text(replacement, encoding="utf-8")
+            return httpx.Response(200, request=httpx.Request("POST", get_aws_sso_oidc_url("us-east-1")),
+                                  json={"accessToken": "fake-rotated-access", "expiresIn": 3600})
+
+        with patch("kiro.auth.httpx.AsyncClient") as client_factory:
+            client_factory.return_value.__aenter__.return_value.post.side_effect = replace_during_refresh
+            with pytest.raises(CredentialFileFormatError, match="exactly one account"):
+                await manager.get_access_token()
+        assert path.read_text(encoding="utf-8") == replacement
+        assert manager._access_token == exported_account["accessToken"]
 
 
 class TestKiroAuthManagerTokenExpiration:

@@ -195,6 +195,13 @@ AWS SSO credentials files (from `~/.aws/sso/cache/`) contain:
 }
 ```
 
+Single-account exports wrapped in an array (`[{ ... }]`) are also supported;
+token refresh preserves the wrapper and other fields. Export multiple accounts
+to separate files and list their `type: "json"` / `path` entries in the account
+configuration. Builder ID / IdC credentials must use the credentials-file option
+so both `clientId` and `clientSecret` reach the OIDC refresh endpoint; copying only
+`refreshToken` into the refresh-token option selects a different authentication flow.
+
 **Note:** AWS SSO (Builder ID and corporate accounts) users do NOT need `profileArn`. The gateway will work without it (if specified, it will be ignored).
 
 </details>

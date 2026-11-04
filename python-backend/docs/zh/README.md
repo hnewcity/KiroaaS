@@ -195,6 +195,11 @@ AWS SSO 凭据文件（来自 `~/.aws/sso/cache/`）包含：
 }
 ```
 
+也支持外层包裹数组的单账号导出文件（`[{ ... }]`），刷新令牌时会保留数组结构及其他字段。
+多个账号请分别保存为独立文件，再在账号配置中用 `type: "json"` 和 `path` 引用。
+Builder ID / IdC 凭据应选择“凭据文件”方式，确保 `clientId` 和 `clientSecret` 一起传给 OIDC
+刷新接口；仅将 `refreshToken` 填入“刷新令牌”方式会走另一种认证流程。
+
 **注意：** AWS SSO (Builder ID 和企业账户) 用户不需要 `profileArn`。网关无需它即可工作（如果指定，将被忽略）。
 
 </details>
